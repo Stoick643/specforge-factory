@@ -1,0 +1,38 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "specforge"
+version = "0.1.0"
+description = "Spec-Driven Multi-Agent Microservice Factory — generate tested, Docker-ready FastAPI services from Markdown specs."
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+authors = [
+    {name = "SpecForge Team"},
+]
+
+dependencies = [
+    "typer>=0.12.0",
+    "rich>=13.0.0",
+    "pydantic>=2.0.0",
+    "pydantic-ai>=0.1.0",
+    "langgraph>=0.2.0",
+    "langchain-openai>=0.2.0",
+    "langchain-core>=0.3.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.optional-dependencies]
+anthropic = ["langchain-anthropic>=0.3.0"]
+all = ["langchain-anthropic>=0.3.0"]
+
+[project.scripts]
+specforge = "specforge.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["specforge"]
+
+[tool.pytest.ini_options]
+addopts = "-p no:capture"

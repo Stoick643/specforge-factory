@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Environment
+.env
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+
+# Testing
+.pytest_cache/
+htmlcov/
+.coverage
+
+# Generated output (not part of SpecForge itself)
+my-shortener/
+my-shortener-pi/
+output/
+
+# Pi agent
+.pi/
+
+# Ralph loop state
+.ralph/
+
+# Cache
+_design_cache.json
