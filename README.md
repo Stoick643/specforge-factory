@@ -23,12 +23,14 @@ The loop runs up to 4 iterations until all tests pass.
 ## Installation
 
 ```bash
+git clone https://github.com/Stoick643/specforge-factory.git
+cd specforge-factory
 pip install -e .
 ```
 
-## Two Ways to Run
+## Three Ways to Use
 
-### Option 1: Pi Provider (no API key needed!)
+### 1. CLI with Pi (no API key needed!)
 
 If you have [Pi](https://github.com/mariozechner/pi-coding-agent) installed with a Claude Max plan:
 
@@ -36,38 +38,27 @@ If you have [Pi](https://github.com/mariozechner/pi-coding-agent) installed with
 specforge generate spec.md --provider pi --output ./my-service
 ```
 
-This spawns Pi as a subprocess and uses your existing Claude access. No API key required!
-
-### Option 2: API Provider (needs API key)
-
-Set your API key in `.env`:
+### 2. CLI with API key
 
 ```bash
 cp .env.example .env
 # Edit .env and set your API key
-```
 
-Supported providers:
-- **OpenAI**: `OPENAI_API_KEY` (models: gpt-4o, gpt-4o-mini)
-- **Anthropic**: `ANTHROPIC_API_KEY` (models: claude-sonnet-4-20250514)
-- **Moonshot/Kimi**: `MOONSHOT_API_KEY` (models: kimi-k2.5)
-- **DeepSeek**: `DEEPSEEK_API_KEY` (models: deepseek-chat)
-- **OpenRouter**: `OPENROUTER_API_KEY` (models: org/model format)
-
-```bash
 specforge generate spec.md --model gpt-4o --output ./my-service
-specforge generate spec.md --model kimi-k2.5 --output ./my-service
 ```
 
-## Usage
+Supported: OpenAI, Anthropic, Moonshot/Kimi, DeepSeek, OpenRouter.
 
-### Generate a microservice from a spec
+### 3. Web UI (browser)
 
 ```bash
-specforge generate path/to/spec.md --output ./my-service
+python -m web.run
+# Open http://localhost:8080
 ```
 
-### Options
+Write your spec in the editor, enter your API key, click Generate. Watch live progress as agents work, then browse the generated files or download as ZIP.
+
+## CLI Usage
 
 ```bash
 specforge generate spec.md \
@@ -85,53 +76,54 @@ specforge generate spec.md \
 | `--max-iterations, -m` | Max Coder->Tester loops | `4` |
 | `--clean` | Remove output dir first | `false` |
 
-### View the built-in example spec
-
-```bash
-specforge example
-specforge example --copy-to my-spec.md
-```
-
 ### Built-in Example: URL Shortener
 
 ```bash
-# Copy the example spec
-specforge example --copy-to shortener.md
-
 # Generate with Pi (no API key needed)
-specforge generate shortener.md --output ./my-shortener --provider pi --clean
-
-# Or with an API key
-specforge generate shortener.md --output ./my-shortener --model gpt-4o --clean
+specforge generate specforge/examples/advanced-shortener-sqlite.md \
+  --output ./my-shortener --provider pi --clean
 
 # Run it
 cd my-shortener
+cp .env.example .env
 docker-compose up --build
 # Visit http://localhost:8000/docs
 ```
 
+## Web UI
+
+The Web UI provides a browser-based interface:
+
+- **Left panel**: Markdown editor with template dropdown
+- **Right panel**: Live progress log during generation
+- **File browser**: Tree view + Monaco editor (VS Code's editor) for code preview
+- **Download**: Get the generated project as a ZIP
+
+```bash
+python -m web.run
+```
+
+Then open http://localhost:8080
+
 ## Project Structure
 
 ```
-specforge/
-    __init__.py, __main__.py
-    cli.py              # Typer CLI
-    config.py           # Model/provider config
-    models.py           # SystemDesign, AgentState, TestResult
-    workflow.py          # LangGraph: Architect -> Coder -> Tester
-    agents/
-        architect.py     # Spec -> SystemDesign
-        coder.py         # SystemDesign -> project files (batch generation)
-        tester.py        # Run pytest, analyze failures
-    providers/
-        __init__.py      # LlmProvider protocol, ApiProvider, PiProvider
-        pi_rpc.py        # Pi RPC subprocess client
-    prompts/
-        architect.py, coder.py, tester.py
-    examples/
-        advanced-shortener-sqlite.md
-    utils/
-        console.py       # Rich console helpers
+specforge/                  # Core engine (CLI + agents)
+    cli.py                  # Typer CLI
+    config.py               # Model/provider config
+    events.py               # Progress event system
+    models.py               # SystemDesign, AgentState, TestResult
+    workflow.py             # LangGraph: Architect -> Coder -> Tester
+    agents/                 # Architect, Coder, Tester
+    providers/              # LlmProvider: API + Pi RPC
+    prompts/                # Agent prompt templates
+    examples/               # Built-in example specs
+    utils/                  # Rich console helpers
+web/                        # Web UI
+    backend/main.py         # FastAPI server + WebSocket
+    frontend/index.html     # Single-page app
+    run.py                  # Start script
+tests/                      # 51 unit tests
 ```
 
 ## License

@@ -7,6 +7,7 @@ import re
 import subprocess
 from pathlib import Path
 
+from specforge import events
 from specforge.models import AgentState, TestResult
 from specforge.prompts.tester import ANALYSIS_PROMPT
 from specforge.providers import get_provider
@@ -101,6 +102,7 @@ def tester_node(state: AgentState) -> dict:
     """LangGraph node: Tester agent."""
     iteration = state.get("iteration", 1)
     print_agent_start("Tester", iteration)
+    events.emit("tester", "start", "Running tests...", iteration=iteration)
 
     output_dir = state["output_dir"]
     generated_files = state.get("generated_files", {})
@@ -139,6 +141,10 @@ def tester_node(state: AgentState) -> dict:
 
         total, passed, failed, errors = _parse_pytest_output(pytest_output)
         print_test_results(passed, failed, errors, total)
+        events.emit("tester", "test_results",
+                     f"{passed}/{total} passed",
+                     iteration=iteration,
+                     passed=passed, failed=failed, errors=errors, total=total)
 
         all_passed = returncode == 0 and failed == 0 and errors == 0 and total > 0
 
@@ -149,6 +155,7 @@ def tester_node(state: AgentState) -> dict:
 
         if all_passed:
             print_agent_done("Tester", f"All {total} tests passed!")
+            events.emit("tester", "done", f"All {total} tests passed!", iteration=iteration)
             return {
                 "test_result": TestResult(
                     passed=True,
@@ -174,6 +181,9 @@ def tester_node(state: AgentState) -> dict:
             print_agent_error(
                 "Tester", f"{failed} failed, {errors} errors out of {total} tests"
             )
+            events.emit("tester", "error",
+                         f"{failed} failed, {errors} errors out of {total} tests",
+                         iteration=iteration)
 
             return {
                 "test_result": TestResult(

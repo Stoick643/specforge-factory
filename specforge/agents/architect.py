@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 
+from specforge import events
 from specforge.models import AgentState, SystemDesign
 from specforge.prompts.architect import SYSTEM_PROMPT, USER_PROMPT
 from specforge.providers import get_provider
@@ -28,6 +29,7 @@ def architect_node(state: AgentState) -> dict:
     Reads the spec text and produces a SystemDesign.
     """
     print_agent_start("Architect")
+    events.emit("architect", "start", "Analyzing spec...")
 
     spec_text = state["spec_text"]
     provider = get_provider()
@@ -44,6 +46,7 @@ def architect_node(state: AgentState) -> dict:
             else:
                 # Fallback: manual JSON parse
                 console.print("  [warning]Using manual JSON parse...[/warning]")
+                events.emit("architect", "progress", "Using manual JSON parse...")
                 json_schema = json.dumps(SystemDesign.model_json_schema(), indent=2)
                 extra = (
                     "\n\nReturn your response as a single JSON object conforming to this schema:\n"
@@ -61,7 +64,15 @@ def architect_node(state: AgentState) -> dict:
         console.print(f"  Env Vars: {len(design.env_variables)}")
         console.print(f"  Dependencies: {len(design.dependencies)}")
 
+        events.emit("architect", "progress",
+                     f"Project: {design.project_name}",
+                     endpoints=len(design.endpoints),
+                     db_models=len(design.database_models),
+                     env_vars=len(design.env_variables),
+                     dependencies=len(design.dependencies))
+
         print_agent_done("Architect", f"Designed {design.project_name}")
+        events.emit("architect", "done", f"Designed {design.project_name}")
 
         return {
             "system_design": design.model_dump(),
@@ -69,6 +80,7 @@ def architect_node(state: AgentState) -> dict:
 
     except Exception as e:
         print_agent_error("Architect", str(e))
+        events.emit("architect", "error", str(e))
         errors = state.get("errors", [])
         errors.append(f"Architect error: {str(e)}")
         return {

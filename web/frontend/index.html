@@ -1,0 +1,656 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SpecForge - Generate Microservices from Specs</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        :root {
+            --bg: #1a1a2e;
+            --bg-panel: #16213e;
+            --bg-input: #0f3460;
+            --accent: #e94560;
+            --accent-hover: #ff6b81;
+            --text: #eee;
+            --text-dim: #888;
+            --border: #333;
+            --success: #2ecc71;
+            --warning: #f39c12;
+            --error: #e74c3c;
+        }
+
+        body {
+            font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* Header */
+        header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 24px;
+            background: var(--bg-panel);
+            border-bottom: 1px solid var(--border);
+        }
+
+        .logo {
+            font-size: 1.4em;
+            font-weight: 700;
+            color: var(--accent);
+        }
+
+        .logo span { color: var(--text-dim); font-weight: 400; font-size: 0.7em; }
+
+        .header-controls {
+            display: flex;
+            gap: 12px;
+            align-items: center;
+        }
+
+        .header-controls select,
+        .header-controls input {
+            background: var(--bg-input);
+            color: var(--text);
+            border: 1px solid var(--border);
+            padding: 6px 10px;
+            border-radius: 4px;
+            font-size: 0.85em;
+        }
+
+        .header-controls input::placeholder { color: var(--text-dim); }
+
+        .header-controls select { cursor: pointer; }
+
+        /* Main layout */
+        .main {
+            flex: 1;
+            display: flex;
+            overflow: hidden;
+        }
+
+        /* Left panel - Editor */
+        .panel-left {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            border-right: 1px solid var(--border);
+        }
+
+        .panel-left .toolbar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 8px 16px;
+            background: var(--bg-panel);
+            border-bottom: 1px solid var(--border);
+        }
+
+        .panel-left .toolbar label { font-size: 0.85em; color: var(--text-dim); }
+
+        #template-select {
+            background: var(--bg-input);
+            color: var(--text);
+            border: 1px solid var(--border);
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 0.85em;
+            cursor: pointer;
+        }
+
+        #spec-editor {
+            flex: 1;
+            background: var(--bg);
+            color: var(--text);
+            border: none;
+            padding: 16px;
+            font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+            font-size: 14px;
+            line-height: 1.6;
+            resize: none;
+            outline: none;
+        }
+
+        /* Right panel - Progress / Results */
+        .panel-right {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .panel-right .toolbar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 8px 16px;
+            background: var(--bg-panel);
+            border-bottom: 1px solid var(--border);
+        }
+
+        .tab-bar {
+            display: flex;
+            gap: 4px;
+        }
+
+        .tab {
+            padding: 4px 12px;
+            border-radius: 4px;
+            font-size: 0.85em;
+            cursor: pointer;
+            background: transparent;
+            color: var(--text-dim);
+            border: none;
+        }
+
+        .tab.active {
+            background: var(--bg-input);
+            color: var(--text);
+        }
+
+        .tab:hover { color: var(--text); }
+
+        /* Progress log */
+        #progress-panel {
+            flex: 1;
+            overflow-y: auto;
+            padding: 16px;
+            font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+            font-size: 13px;
+            line-height: 1.8;
+        }
+
+        .log-line { margin-bottom: 2px; }
+        .log-agent { color: var(--accent); font-weight: 700; }
+        .log-ok { color: var(--success); }
+        .log-fail { color: var(--error); }
+        .log-warn { color: var(--warning); }
+        .log-dim { color: var(--text-dim); }
+
+        /* File browser */
+        #files-panel {
+            flex: 1;
+            display: none;
+            overflow: hidden;
+        }
+
+        #files-panel.active { display: flex; }
+        #progress-panel.active { display: block; }
+        #progress-panel { display: block; }
+
+        .file-tree {
+            width: 240px;
+            overflow-y: auto;
+            background: var(--bg-panel);
+            border-right: 1px solid var(--border);
+            padding: 8px 0;
+            font-size: 13px;
+        }
+
+        .file-item {
+            padding: 4px 16px;
+            cursor: pointer;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .file-item:hover { background: var(--bg-input); }
+        .file-item.active { background: var(--accent); color: white; }
+        .file-item.folder { color: var(--warning); font-weight: 600; }
+
+        .file-content {
+            flex: 1;
+            overflow: auto;
+            padding: 0;
+        }
+
+        #code-display {
+            width: 100%;
+            height: 100%;
+            min-height: 100%;
+        }
+
+        /* Generate button */
+        #btn-generate {
+            background: var(--accent);
+            color: white;
+            border: none;
+            padding: 8px 20px;
+            border-radius: 4px;
+            font-size: 0.9em;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        #btn-generate:hover { background: var(--accent-hover); }
+        #btn-generate:disabled {
+            background: var(--border);
+            cursor: not-allowed;
+        }
+
+        /* Download button */
+        #btn-download {
+            display: none;
+            background: var(--success);
+            color: white;
+            border: none;
+            padding: 6px 14px;
+            border-radius: 4px;
+            font-size: 0.85em;
+            font-weight: 600;
+            cursor: pointer;
+            text-decoration: none;
+        }
+
+        #btn-download:hover { opacity: 0.9; }
+
+        /* Status bar */
+        .status-bar {
+            padding: 6px 24px;
+            background: var(--bg-panel);
+            border-top: 1px solid var(--border);
+            font-size: 0.8em;
+            color: var(--text-dim);
+            display: flex;
+            justify-content: space-between;
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .main { flex-direction: column; }
+            .panel-left { border-right: none; border-bottom: 1px solid var(--border); }
+            .file-tree { width: 180px; }
+        }
+    </style>
+</head>
+<body>
+
+<header>
+    <div class="logo">SpecForge <span>Microservice Factory</span></div>
+    <div class="header-controls">
+        <select id="provider-select">
+            <option value="openai">OpenAI</option>
+            <option value="anthropic">Anthropic</option>
+            <option value="moonshot">Moonshot/Kimi</option>
+            <option value="deepseek">DeepSeek</option>
+            <option value="pi">Pi (no key needed)</option>
+        </select>
+        <input type="password" id="api-key" placeholder="API key (sk-...)" size="30">
+        <button id="btn-generate" onclick="startGeneration()">Generate</button>
+    </div>
+</header>
+
+<div class="main">
+    <!-- Left: Spec Editor -->
+    <div class="panel-left">
+        <div class="toolbar">
+            <label>Spec</label>
+            <select id="template-select" onchange="loadTemplate()">
+                <option value="">-- Load template --</option>
+            </select>
+        </div>
+        <textarea id="spec-editor" placeholder="# My API
+
+Describe your API here...
+
+## Features
+- Feature 1
+- Feature 2
+
+## Requirements
+- SQLite / PostgreSQL
+- JWT authentication
+- Docker ready"></textarea>
+    </div>
+
+    <!-- Right: Progress + Files -->
+    <div class="panel-right">
+        <div class="toolbar">
+            <div class="tab-bar">
+                <button class="tab active" onclick="showTab('progress')">Progress</button>
+                <button class="tab" onclick="showTab('files')">Files</button>
+            </div>
+            <a id="btn-download" href="#">Download ZIP</a>
+        </div>
+        <div id="progress-panel" class="active">
+            <div class="log-line log-dim">Ready. Write a spec and click Generate.</div>
+        </div>
+        <div id="files-panel">
+            <div class="file-tree" id="file-tree"></div>
+            <div class="file-content">
+                <div id="code-display"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="status-bar">
+    <span id="status-text">Idle</span>
+    <span id="status-files"></span>
+</div>
+
+<!-- Monaco Editor from CDN -->
+<script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs/loader.js"></script>
+
+<script>
+    // State
+    let ws = null;
+    let generatedFiles = {};
+    let currentJobId = null;
+    let monacoEditor = null;
+    let templates = [];
+
+    // Initialize Monaco
+    require.config({ paths: { vs: 'https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs' } });
+    require(['vs/editor/editor.main'], function () {
+        monacoEditor = monaco.editor.create(document.getElementById('code-display'), {
+            value: '// Select a file from the tree to view its contents',
+            language: 'python',
+            theme: 'vs-dark',
+            readOnly: true,
+            minimap: { enabled: false },
+            fontSize: 13,
+            lineNumbers: 'on',
+            scrollBeyondLastLine: false,
+            automaticLayout: true,
+        });
+    });
+
+    // Load templates on page load
+    async function loadTemplates() {
+        try {
+            const resp = await fetch('/api/examples');
+            const data = await resp.json();
+            templates = data.examples || [];
+            const select = document.getElementById('template-select');
+            templates.forEach(t => {
+                const opt = document.createElement('option');
+                opt.value = t.name;
+                opt.textContent = t.title;
+                select.appendChild(opt);
+            });
+            // Pre-fill with first template
+            if (templates.length > 0) {
+                document.getElementById('spec-editor').value = templates[0].content;
+                select.value = templates[0].name;
+            }
+        } catch (e) {
+            console.error('Failed to load templates:', e);
+        }
+    }
+
+    function loadTemplate() {
+        const name = document.getElementById('template-select').value;
+        const t = templates.find(t => t.name === name);
+        if (t) {
+            document.getElementById('spec-editor').value = t.content;
+        }
+    }
+
+    // Tab switching
+    function showTab(tab) {
+        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+        document.getElementById('progress-panel').style.display = tab === 'progress' ? 'block' : 'none';
+        document.getElementById('files-panel').style.display = tab === 'files' ? 'flex' : 'none';
+        // Activate the clicked tab
+        event.target.classList.add('active');
+        if (tab === 'files' && monacoEditor) {
+            monacoEditor.layout();
+        }
+    }
+
+    // Progress logging
+    function clearLog() {
+        document.getElementById('progress-panel').innerHTML = '';
+    }
+
+    function addLog(html) {
+        const panel = document.getElementById('progress-panel');
+        const line = document.createElement('div');
+        line.className = 'log-line';
+        line.innerHTML = html;
+        panel.appendChild(line);
+        panel.scrollTop = panel.scrollHeight;
+    }
+
+    // File tree
+    function buildFileTree(files) {
+        const tree = document.getElementById('file-tree');
+        tree.innerHTML = '';
+        const paths = Object.keys(files).sort();
+
+        // Group by directory
+        const dirs = new Set();
+        paths.forEach(p => {
+            const parts = p.split('/');
+            if (parts.length > 1) {
+                let dir = '';
+                for (let i = 0; i < parts.length - 1; i++) {
+                    dir += (dir ? '/' : '') + parts[i];
+                    dirs.add(dir);
+                }
+            }
+        });
+
+        // Render flat list with indentation
+        const rendered = new Set();
+        paths.forEach(filepath => {
+            const parts = filepath.split('/');
+            // Add directory entries
+            let dir = '';
+            for (let i = 0; i < parts.length - 1; i++) {
+                dir += (dir ? '/' : '') + parts[i];
+                if (!rendered.has(dir)) {
+                    rendered.add(dir);
+                    const el = document.createElement('div');
+                    el.className = 'file-item folder';
+                    el.style.paddingLeft = (16 + i * 16) + 'px';
+                    el.textContent = parts[i] + '/';
+                    tree.appendChild(el);
+                }
+            }
+            // Add file entry
+            const el = document.createElement('div');
+            el.className = 'file-item';
+            el.style.paddingLeft = (16 + (parts.length - 1) * 16) + 'px';
+            el.textContent = parts[parts.length - 1];
+            el.onclick = () => selectFile(filepath, el);
+            tree.appendChild(el);
+        });
+    }
+
+    function selectFile(filepath, el) {
+        // Highlight selected
+        document.querySelectorAll('.file-item').forEach(e => e.classList.remove('active'));
+        el.classList.add('active');
+
+        // Show content in Monaco
+        const content = generatedFiles[filepath] || '';
+        const lang = detectLanguage(filepath);
+        if (monacoEditor) {
+            const model = monaco.editor.createModel(content, lang);
+            monacoEditor.setModel(model);
+        }
+    }
+
+    function detectLanguage(filepath) {
+        if (filepath.endsWith('.py')) return 'python';
+        if (filepath.endsWith('.yml') || filepath.endsWith('.yaml')) return 'yaml';
+        if (filepath.endsWith('.json')) return 'json';
+        if (filepath.endsWith('.md')) return 'markdown';
+        if (filepath.endsWith('.txt')) return 'plaintext';
+        if (filepath.endsWith('.toml')) return 'ini';
+        if (filepath.endsWith('Dockerfile')) return 'dockerfile';
+        if (filepath.endsWith('.env') || filepath.endsWith('.env.example')) return 'ini';
+        return 'plaintext';
+    }
+
+    function setStatus(text) {
+        document.getElementById('status-text').textContent = text;
+    }
+
+    function setFileCount(count) {
+        document.getElementById('status-files').textContent = count ? `${count} files generated` : '';
+    }
+
+    // Provider change - hide/show API key
+    document.getElementById('provider-select').addEventListener('change', function () {
+        const keyInput = document.getElementById('api-key');
+        if (this.value === 'pi') {
+            keyInput.style.display = 'none';
+        } else {
+            keyInput.style.display = 'block';
+        }
+    });
+
+    // WebSocket generation
+    function startGeneration() {
+        const spec = document.getElementById('spec-editor').value;
+        const apiKey = document.getElementById('api-key').value;
+        const provider = document.getElementById('provider-select').value;
+
+        if (!spec.trim()) {
+            alert('Please write a spec first!');
+            return;
+        }
+
+        if (provider !== 'pi' && !apiKey.trim()) {
+            alert('Please enter your API key (or select Pi provider).');
+            return;
+        }
+
+        // Reset UI
+        clearLog();
+        generatedFiles = {};
+        currentJobId = null;
+        document.getElementById('btn-download').style.display = 'none';
+        document.getElementById('file-tree').innerHTML = '';
+        showTab('progress');
+        document.querySelector('.tab').click();
+
+        // Disable button
+        const btn = document.getElementById('btn-generate');
+        btn.disabled = true;
+        btn.textContent = 'Generating...';
+        setStatus('Connecting...');
+
+        // Connect WebSocket
+        const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+        ws = new WebSocket(`${protocol}//${location.host}/ws/generate`);
+
+        ws.onopen = () => {
+            setStatus('Connected. Starting generation...');
+            ws.send(JSON.stringify({
+                spec: spec,
+                api_key: apiKey,
+                provider: provider,
+                model: getModelForProvider(provider),
+            }));
+        };
+
+        ws.onmessage = (event) => {
+            const data = JSON.parse(event.data);
+            handleEvent(data);
+        };
+
+        ws.onerror = () => {
+            addLog('<span class="log-fail">WebSocket error. Is the backend running?</span>');
+            setStatus('Error');
+            resetButton();
+        };
+
+        ws.onclose = () => {
+            if (btn.disabled) {
+                setStatus('Connection closed');
+                resetButton();
+            }
+        };
+    }
+
+    function getModelForProvider(provider) {
+        const models = {
+            openai: 'gpt-4o',
+            anthropic: 'claude-sonnet-4-20250514',
+            moonshot: 'kimi-k2.5',
+            deepseek: 'deepseek-chat',
+            pi: '',
+        };
+        return models[provider] || 'gpt-4o';
+    }
+
+    function handleEvent(data) {
+        if (data.event === 'complete') {
+            // Generation finished
+            generatedFiles = data.files || {};
+            currentJobId = data.job_id;
+            const fileCount = Object.keys(generatedFiles).length;
+
+            if (data.status === 'success') {
+                addLog(`<br><span class="log-ok">** Generation complete! ${fileCount} files, all tests passed. **</span>`);
+                setStatus('Success!');
+            } else {
+                addLog(`<br><span class="log-warn">Generation finished with status: ${data.status}. ${fileCount} files generated.</span>`);
+                setStatus('Finished (partial)');
+            }
+
+            // Show download button
+            if (currentJobId && fileCount > 0) {
+                const btn = document.getElementById('btn-download');
+                btn.href = `/api/jobs/${currentJobId}/download`;
+                btn.style.display = 'inline-block';
+            }
+
+            // Build file tree
+            buildFileTree(generatedFiles);
+            setFileCount(fileCount);
+            resetButton();
+            return;
+        }
+
+        if (data.event === 'error') {
+            addLog(`<span class="log-fail">[ERROR] ${data.message}</span>`);
+            setStatus('Error');
+            resetButton();
+            return;
+        }
+
+        // Agent progress events
+        const agent = data.agent || '';
+        const ev = data.event || '';
+        const msg = data.message || '';
+        const iter = data.iteration ? ` (iteration ${data.iteration})` : '';
+
+        if (ev === 'start') {
+            addLog(`<br><span class="log-agent">&gt; ${agent}${iter}</span>`);
+            setStatus(`${agent}...`);
+        } else if (ev === 'done') {
+            addLog(`<span class="log-ok">  [OK] ${msg}</span>`);
+        } else if (ev === 'error') {
+            addLog(`<span class="log-fail">  [FAIL] ${msg}</span>`);
+        } else if (ev === 'test_results') {
+            const d = data.data || {};
+            addLog(`  Tests: ${d.passed || 0} passed, ${d.failed || 0} failed, ${d.errors || 0} errors / ${d.total || 0} total`);
+        } else if (ev === 'progress') {
+            addLog(`<span class="log-dim">  ${msg}</span>`);
+        }
+    }
+
+    function resetButton() {
+        const btn = document.getElementById('btn-generate');
+        btn.disabled = false;
+        btn.textContent = 'Generate';
+    }
+
+    // Init
+    loadTemplates();
+</script>
+
+</body>
+</html>

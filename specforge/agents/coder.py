@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 
+from specforge import events
 from specforge.models import AgentState
 from specforge.prompts.coder import REPAIR_PROMPT, SYSTEM_PROMPT, USER_PROMPT
 from specforge.providers import get_provider
@@ -127,6 +128,7 @@ def _generate_in_batches(system_design_json: str, error_context: str = "") -> di
 
     for batch in batches:
         console.print(f"    Generating {batch['name']} files...")
+        events.emit("coder", "progress", f"Generating {batch['name']} files...")
         prompt = (
             f"System Design:\n{system_design_json}\n\n"
             f"{batch['instruction']}\n"
@@ -161,6 +163,7 @@ def _generate_in_batches(system_design_json: str, error_context: str = "") -> di
                 batch_files = _parse_files_response(response)
                 all_files.update(batch_files)
                 console.print(f"    Got {len(batch_files)} files")
+                events.emit("coder", "progress", f"Got {len(batch_files)} {batch['name']} files")
                 break
             except (json.JSONDecodeError, ValueError) as e:
                 preview = (response[:200] + "...") if response and len(response) > 200 else response
@@ -176,6 +179,7 @@ def coder_node(state: AgentState) -> dict:
     """LangGraph node: Coder agent."""
     iteration = state.get("iteration", 1)
     print_agent_start("Coder", iteration)
+    events.emit("coder", "start", "Generating project files...", iteration=iteration)
 
     system_design = state["system_design"]
     test_result = state.get("test_result")
@@ -199,6 +203,9 @@ def coder_node(state: AgentState) -> dict:
             console.print(f"    {filepath}")
 
         print_agent_done("Coder", f"Generated {len(generated_files)} files")
+        events.emit("coder", "done", f"Generated {len(generated_files)} files",
+                     iteration=iteration, file_count=len(generated_files),
+                     files=list(generated_files.keys()))
 
         return {
             "generated_files": generated_files,
@@ -206,6 +213,7 @@ def coder_node(state: AgentState) -> dict:
 
     except (json.JSONDecodeError, ValueError) as e:
         print_agent_error("Coder", f"Failed to parse LLM response: {e}")
+        events.emit("coder", "error", f"JSON parse failed: {e}", iteration=iteration)
         # Don't set status=error — let the Tester re-run on existing files
         # This way the loop can continue with another iteration
         console.print("  [warning]Keeping previous files on disk, Tester will re-run[/warning]")
