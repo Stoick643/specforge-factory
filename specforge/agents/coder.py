@@ -315,11 +315,9 @@ def _generate_in_batches(
     batches = _build_dynamic_batches(system_design)
     batch_system = _build_batch_system_prompt(system_design)
 
-    # Use condensed design on repair iterations to save tokens
-    if error_context:
-        system_design_text = _condense_system_design(system_design)
-    else:
-        system_design_text = json.dumps(system_design, indent=2)
+    # Always use condensed design — full JSON can be 70KB+ for large specs.
+    # The batch instructions already contain the relevant details per batch.
+    system_design_text = _condense_system_design(system_design)
 
     for batch in batches:
         console.print(f"    Generating {batch['name']} files...")
