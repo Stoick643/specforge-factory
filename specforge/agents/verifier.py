@@ -152,13 +152,22 @@ def check_docker_builds(output_dir: str) -> VerificationCheck:
             details="No Dockerfile found",
         )
 
-    # Check if Docker is available
+    # Check if Docker is available and daemon is running
     try:
-        subprocess.run(
-            ["docker", "version"],
+        docker_check = subprocess.run(
+            ["docker", "ps"],
             capture_output=True,
+            text=True,
             timeout=10,
         )
+        if docker_check.returncode != 0:
+            detail = docker_check.stderr.strip().split("\n")[0] if docker_check.stderr else "Docker daemon not running"
+            return VerificationCheck(
+                name="Docker builds",
+                passed=False,
+                details=f"Docker not available: {detail}",
+                skipped=True,
+            )
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return VerificationCheck(
             name="Docker builds",
@@ -210,7 +219,23 @@ def check_spec_coverage(
             details="No endpoints in spec to verify",
         )
 
-    # Extract route paths from generated code
+    # Step 1: Extract router prefixes from main.py
+    # Matches: app.include_router(auth_router, prefix="/api/auth")
+    prefix_map: dict[str, str] = {}  # router variable name -> prefix
+    prefix_pattern = re.compile(
+        r'include_router\(\s*(\w+).*?prefix\s*=\s*["\']([^"\']+)["\']',
+        re.DOTALL,
+    )
+    main_content = ""
+    for fp, content in generated_files.items():
+        if "main.py" in fp:
+            main_content = content
+            for match in prefix_pattern.finditer(content):
+                router_var = match.group(1)
+                prefix = match.group(2).rstrip("/")
+                prefix_map[router_var] = prefix
+
+    # Step 2: Extract route paths from generated code
     generated_routes: set[str] = set()
     route_pattern = re.compile(
         r'@\w+\.(get|post|put|patch|delete)\(\s*["\']([^"\']+)["\']',
@@ -218,10 +243,38 @@ def check_spec_coverage(
     )
     for filepath, content in generated_files.items():
         if "router" in filepath.lower() or "main.py" in filepath:
+            # Try to find which prefix applies to this file
+            file_prefix = ""
+            if "router" in filepath.lower():
+                # Match router file to prefix by checking imports in main.py
+                # e.g., "from app.routers.auth import router as auth_router"
+                module_name = filepath.replace("/", ".").replace("\\", ".").replace(".py", "")
+                for var_name, prefix in prefix_map.items():
+                    # Check if main.py imports from this module with this var name
+                    import_pattern = re.compile(
+                        rf'from\s+{re.escape(module_name)}\s+import.*?{re.escape(var_name)}'
+                        rf'|from\s+\S*{re.escape(filepath.split("/")[-1].replace(".py", ""))}\s+import.*?{re.escape(var_name)}'
+                    )
+                    if import_pattern.search(main_content):
+                        file_prefix = prefix
+                        break
+                # Fallback: try matching by filename convention
+                # e.g., routers/auth.py → prefix containing "auth"
+                if not file_prefix:
+                    basename = filepath.split("/")[-1].replace(".py", "")
+                    for var_name, prefix in prefix_map.items():
+                        if basename in var_name or basename in prefix:
+                            file_prefix = prefix
+                            break
+
             for match in route_pattern.finditer(content):
                 method = match.group(1).upper()
                 path = match.group(2)
+                # Add both the raw path and the prefixed path
                 generated_routes.add(f"{method} {path}")
+                if file_prefix:
+                    full_path = file_prefix + path if path != "/" else file_prefix
+                    generated_routes.add(f"{method} {full_path}")
 
     # Check which spec endpoints are covered
     missing = []
