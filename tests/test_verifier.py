@@ -99,7 +99,7 @@ class TestCheckSpecCoverage:
         result = check_spec_coverage(files, design)
         assert result.passed
 
-    def test_router_with_prefix(self):
+    def test_router_with_include_prefix(self):
         """Routes with include_router prefix should be combined correctly."""
         files = {
             "app/main.py": (
@@ -117,6 +117,43 @@ class TestCheckSpecCoverage:
             "endpoints": [
                 {"method": "POST", "path": "/api/auth/register"},
                 {"method": "POST", "path": "/api/auth/login"},
+            ]
+        }
+        result = check_spec_coverage(files, design)
+        assert result.passed, f"Expected pass but got: {result.details}"
+
+    def test_router_with_apirouter_prefix(self):
+        """Routes with APIRouter(prefix=...) should be combined correctly."""
+        files = {
+            "app/main.py": (
+                'from app.routers import auth, bookmarks\n'
+                'app.include_router(auth.router)\n'
+                'app.include_router(bookmarks.router)\n'
+            ),
+            "app/routers/auth.py": (
+                'router = APIRouter(prefix="/api/auth", tags=["Auth"])\n'
+                '@router.post("/register")\n'
+                'def register(): pass\n'
+                '@router.post("/login")\n'
+                'def login(): pass\n'
+            ),
+            "app/routers/bookmarks.py": (
+                'router = APIRouter(prefix="/api/bookmarks", tags=["Bookmarks"])\n'
+                '@router.get("/")\n'
+                'def list_bookmarks(): pass\n'
+                '@router.post("/")\n'
+                'def create_bookmark(): pass\n'
+                '@router.get("/{bookmark_id}")\n'
+                'def get_bookmark(): pass\n'
+            ),
+        }
+        design = {
+            "endpoints": [
+                {"method": "POST", "path": "/api/auth/register"},
+                {"method": "POST", "path": "/api/auth/login"},
+                {"method": "GET", "path": "/api/bookmarks"},
+                {"method": "POST", "path": "/api/bookmarks"},
+                {"method": "GET", "path": "/api/bookmarks/{id}"},
             ]
         }
         result = check_spec_coverage(files, design)

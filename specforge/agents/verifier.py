@@ -182,6 +182,8 @@ def check_docker_builds(output_dir: str) -> VerificationCheck:
             cwd=output_dir,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=300,
         )
         if result.returncode == 0:
@@ -238,28 +240,37 @@ def check_spec_coverage(
     # Step 2: Extract route paths from generated code
     generated_routes: set[str] = set()
     route_pattern = re.compile(
-        r'@\w+\.(get|post|put|patch|delete)\(\s*["\']([^"\']+)["\']',
+        r'@\w+\.(get|post|put|patch|delete)\(\s*["\']([^"\']*)["\']',
         re.IGNORECASE,
     )
+    # Also match APIRouter(prefix="/api/auth") in router files
+    apirouter_prefix_pattern = re.compile(
+        r'APIRouter\([^)]*prefix\s*=\s*["\']([^"\']+)["\']',
+    )
+
     for filepath, content in generated_files.items():
         if "router" in filepath.lower() or "main.py" in filepath:
             # Try to find which prefix applies to this file
             file_prefix = ""
             if "router" in filepath.lower():
-                # Match router file to prefix by checking imports in main.py
-                # e.g., "from app.routers.auth import router as auth_router"
-                module_name = filepath.replace("/", ".").replace("\\", ".").replace(".py", "")
-                for var_name, prefix in prefix_map.items():
-                    # Check if main.py imports from this module with this var name
-                    import_pattern = re.compile(
-                        rf'from\s+{re.escape(module_name)}\s+import.*?{re.escape(var_name)}'
-                        rf'|from\s+\S*{re.escape(filepath.split("/")[-1].replace(".py", ""))}\s+import.*?{re.escape(var_name)}'
-                    )
-                    if import_pattern.search(main_content):
-                        file_prefix = prefix
-                        break
+                # Check for APIRouter(prefix=...) directly in the router file
+                apirouter_match = apirouter_prefix_pattern.search(content)
+                if apirouter_match:
+                    file_prefix = apirouter_match.group(1).rstrip("/")
+
+                # If not found, check include_router prefixes from main.py
+                if not file_prefix:
+                    module_name = filepath.replace("/", ".").replace("\\", ".").replace(".py", "")
+                    for var_name, prefix in prefix_map.items():
+                        import_pattern = re.compile(
+                            rf'from\s+{re.escape(module_name)}\s+import.*?{re.escape(var_name)}'
+                            rf'|from\s+\S*{re.escape(filepath.split("/")[-1].replace(".py", ""))}\s+import.*?{re.escape(var_name)}'
+                        )
+                        if import_pattern.search(main_content):
+                            file_prefix = prefix
+                            break
+
                 # Fallback: try matching by filename convention
-                # e.g., routers/auth.py → prefix containing "auth"
                 if not file_prefix:
                     basename = filepath.split("/")[-1].replace(".py", "")
                     for var_name, prefix in prefix_map.items():
@@ -273,7 +284,10 @@ def check_spec_coverage(
                 # Add both the raw path and the prefixed path
                 generated_routes.add(f"{method} {path}")
                 if file_prefix:
-                    full_path = file_prefix + path if path != "/" else file_prefix
+                    if path in ("", "/"):
+                        full_path = file_prefix
+                    else:
+                        full_path = file_prefix + path
                     generated_routes.add(f"{method} {full_path}")
 
     # Check which spec endpoints are covered
