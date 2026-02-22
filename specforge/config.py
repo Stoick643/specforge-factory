@@ -58,8 +58,14 @@ PROVIDER_CONFIG = {
 }
 
 
-def get_llm(temperature: float = 0.1, max_tokens: int | None = None):
+def get_llm(temperature: float = 0.1, max_tokens: int | None = None, *, api_key: str | None = None, model_override: str | None = None):
     """Get a configured LLM instance based on current model.
+
+    Args:
+        temperature: LLM temperature.
+        max_tokens: Max tokens for response.
+        api_key: Explicit API key (avoids os.environ lookup). Used by Web UI for thread safety.
+        model_override: Explicit model name (avoids global get_model()). Used by Web UI.
 
     Supports:
     - OpenAI models (gpt-*)
@@ -68,7 +74,7 @@ def get_llm(temperature: float = 0.1, max_tokens: int | None = None):
     - Moonshot/Kimi models (kimi-*, moonshot-*)
     - DeepSeek models (deepseek-*)
     """
-    model = get_model()
+    model = model_override or get_model()
     provider = _detect_provider(model)
 
     # Some models have temperature restrictions
@@ -82,14 +88,16 @@ def get_llm(temperature: float = 0.1, max_tokens: int | None = None):
 
     if provider == "anthropic":
         from langchain_anthropic import ChatAnthropic
+        if api_key:
+            kwargs["api_key"] = api_key
         return ChatAnthropic(**kwargs)
 
     if provider in PROVIDER_CONFIG:
         env_var, base_url = PROVIDER_CONFIG[provider]
-        api_key = os.environ.get(env_var, "")
+        resolved_key = api_key or os.environ.get(env_var, "")
         from langchain_openai import ChatOpenAI
         return ChatOpenAI(
-            api_key=api_key,
+            api_key=resolved_key,
             base_url=base_url,
             **kwargs,
         )
@@ -97,6 +105,8 @@ def get_llm(temperature: float = 0.1, max_tokens: int | None = None):
     # Default: OpenAI (also supports custom base via OPENAI_API_BASE)
     from langchain_openai import ChatOpenAI
     extra = {}
+    if api_key:
+        extra["api_key"] = api_key
     custom_base = os.environ.get("OPENAI_API_BASE")
     if custom_base:
         extra["base_url"] = custom_base

@@ -23,8 +23,8 @@ Guidelines:
 - Use async patterns (async SQLAlchemy, async endpoints)
 - For auth: include login endpoint that returns JWT, and middleware to validate it
 - For rate limiting: specify the algorithm and limits
-- List ALL Python packages needed (fastapi, uvicorn, sqlmodel, python-jose, passlib, etc.)
-- Think about edge cases: what happens on duplicate slugs, expired links, etc.
+- List ALL Python packages needed. Always include fastapi and uvicorn. Add database, auth, and other libraries as appropriate for the spec.
+- Think about edge cases relevant to the spec (validation errors, duplicates, not found, etc.)
 """
 
 USER_PROMPT = """\

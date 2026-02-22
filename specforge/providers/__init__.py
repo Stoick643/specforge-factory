@@ -10,7 +10,7 @@ Thread-safe via RunConfig: each generation run gets its own config and provider 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Protocol, runtime_checkable
+from typing import Callable, Protocol, runtime_checkable
 
 
 @runtime_checkable
@@ -33,8 +33,9 @@ class LlmProvider(Protocol):
 class ApiProvider:
     """Provider that uses langchain ChatOpenAI/ChatAnthropic for direct API calls."""
 
-    def __init__(self, model: str | None = None):
+    def __init__(self, model: str | None = None, api_key: str | None = None):
         self._model = model
+        self._api_key = api_key
 
     def invoke(self, system_prompt: str, user_prompt: str) -> str:
         from langchain_core.messages import HumanMessage, SystemMessage
@@ -60,16 +61,12 @@ class ApiProvider:
             return None
 
     def _get_llm(self, temperature: float = 0.1):
-        from specforge.config import get_llm, get_model, set_model
-        # If we have a specific model, temporarily set it
-        if self._model:
-            old_model = get_model()
-            set_model(self._model)
-            try:
-                return get_llm(temperature=temperature)
-            finally:
-                set_model(old_model)
-        return get_llm(temperature=temperature)
+        from specforge.config import get_llm
+        return get_llm(
+            temperature=temperature,
+            api_key=self._api_key,
+            model_override=self._model,
+        )
 
     def stop(self) -> None:
         pass  # Nothing to clean up
@@ -114,6 +111,8 @@ class RunConfig:
     """
     provider_type: str = "api"  # "api" or "pi"
     model: str | None = None
+    api_key: str | None = None  # Explicit API key (avoids os.environ)
+    on_progress: Callable | None = None  # Per-run progress callback (for event scoping)
     _provider: LlmProvider | None = field(default=None, init=False, repr=False)
 
     def get_provider(self) -> LlmProvider:
@@ -122,7 +121,7 @@ class RunConfig:
             if self.provider_type == "pi":
                 self._provider = PiProvider()
             else:
-                self._provider = ApiProvider(model=self.model)
+                self._provider = ApiProvider(model=self.model, api_key=self.api_key)
         return self._provider
 
     def stop(self) -> None:

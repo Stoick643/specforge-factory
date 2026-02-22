@@ -409,12 +409,13 @@ def run_verification(
     failed_tests: int,
     error_tests: int,
     run_docker_check: bool = True,
+    _run_callback=None,
 ) -> VerificationReport:
     """Run all 6 verification checks and return a report."""
     report = VerificationReport()
 
     console.print("\n[bold]Running verification checks...[/bold]")
-    events.emit("verifier", "start", "Running verification checks...")
+    events.emit("verifier", "start", "Running verification checks...", _run_callback=_run_callback)
 
     # Check 1: Tests pass
     console.print("  Checking: Tests pass...")
@@ -446,7 +447,7 @@ def run_verification(
     report.checks.append(check_project_structure(generated_files))
 
     events.emit("verifier", "done", f"{report.passed_count}/{report.total_count} checks passed",
-                 **report.to_dict())
+                 _run_callback=_run_callback, **report.to_dict())
 
     return report
 

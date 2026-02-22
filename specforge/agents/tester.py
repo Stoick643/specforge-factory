@@ -234,7 +234,8 @@ def tester_node(state: AgentState) -> dict:
     """LangGraph node: Tester agent."""
     iteration = state.get("iteration", 1)
     print_agent_start("Tester", iteration)
-    events.emit("tester", "start", "Running tests...", iteration=iteration)
+    _cb = events.get_run_callback(state)
+    events.emit("tester", "start", "Running tests...", iteration=iteration, _run_callback=_cb)
 
     output_dir = state["output_dir"]
     generated_files = state.get("generated_files", {})
@@ -270,7 +271,7 @@ def tester_node(state: AgentState) -> dict:
         if validation_warnings:
             for w in validation_warnings:
                 console.print(f"  [warning]⚠ {w}[/warning]")
-            events.emit("tester", "progress", f"Validation: {len(validation_warnings)} warning(s)")
+            events.emit("tester", "progress", f"Validation: {len(validation_warnings)} warning(s)", _run_callback=_cb)
 
         # Step 2: Install dependencies
         with console.status("[bold cyan]Installing dependencies..."):
@@ -293,7 +294,7 @@ def tester_node(state: AgentState) -> dict:
         print_test_results(passed, failed, errors, total)
         events.emit("tester", "test_results",
                      f"{passed}/{total} passed",
-                     iteration=iteration,
+                     iteration=iteration, _run_callback=_cb,
                      passed=passed, failed=failed, errors=errors, total=total)
 
         all_passed = returncode == 0 and failed == 0 and errors == 0 and total > 0
@@ -309,7 +310,7 @@ def tester_node(state: AgentState) -> dict:
 
         if all_passed:
             print_agent_done("Tester", f"All {total} tests passed!")
-            events.emit("tester", "done", f"All {total} tests passed!", iteration=iteration)
+            events.emit("tester", "done", f"All {total} tests passed!", iteration=iteration, _run_callback=_cb)
 
         # Run verification on final iteration (success or last attempt)
         verification_report = None
@@ -328,11 +329,12 @@ def tester_node(state: AgentState) -> dict:
                     total_tests=total,
                     failed_tests=failed,
                     error_tests=errors,
+                    _run_callback=_cb,
                 )
                 print_verification_report(verification_report)
             except Exception as e:
                 console.print(f"  [warning]⚠ Verification failed: {e}[/warning]")
-                events.emit("verifier", "error", str(e))
+                events.emit("verifier", "error", str(e), _run_callback=_cb)
 
         if all_passed:
             result = {
@@ -365,7 +367,7 @@ def tester_node(state: AgentState) -> dict:
             )
             events.emit("tester", "error",
                          f"{failed} failed, {errors} errors out of {total} tests",
-                         iteration=iteration)
+                         iteration=iteration, _run_callback=_cb)
 
             result = {
                 "test_result": TestRunResult(

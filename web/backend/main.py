@@ -8,8 +8,10 @@ import os
 import shutil
 import tempfile
 import zipfile
+from collections import OrderedDict
 from io import BytesIO
 from pathlib import Path
+from typing import Callable
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -29,7 +31,16 @@ app.add_middleware(
 )
 
 # Store for completed generations: job_id -> {files, status, output_dir}
-_jobs: dict[str, dict] = {}
+# Uses OrderedDict with max size to prevent unbounded memory growth.
+MAX_JOBS = 100
+_jobs: OrderedDict[str, dict] = OrderedDict()
+
+
+def _store_job(job_id: str, data: dict) -> None:
+    """Store a job result, evicting oldest if over limit."""
+    _jobs[job_id] = data
+    while len(_jobs) > MAX_JOBS:
+        _jobs.popitem(last=False)  # Remove oldest
 
 
 @app.get("/api/health")
@@ -112,7 +123,7 @@ async def ws_generate(websocket: WebSocket):
             await websocket.send_json({"event": "error", "message": "Empty spec"})
             return
 
-        # Set up event handler that sends to WebSocket
+        # Set up per-run progress callback (scoped to this WebSocket)
         loop = asyncio.get_event_loop()
 
         async def send_event(ev: events.ProgressEvent):
@@ -121,38 +132,34 @@ async def ws_generate(websocket: WebSocket):
             except Exception:
                 pass
 
-        def event_handler(ev: events.ProgressEvent):
+        def on_progress(ev: events.ProgressEvent):
+            """Per-run callback — only this WebSocket receives these events."""
             asyncio.run_coroutine_threadsafe(send_event(ev), loop)
 
-        events.add_handler(event_handler)
+        # Run generation in a thread (it's synchronous)
+        job_id = f"job-{id(websocket)}"
+        result = await asyncio.to_thread(
+            _run_generation,
+            spec_text=spec_text,
+            api_key=api_key,
+            provider=provider,
+            model=model,
+            on_progress=on_progress,
+        )
 
-        try:
-            # Run generation in a thread (it's synchronous)
-            job_id = f"job-{id(websocket)}"
-            result = await asyncio.to_thread(
-                _run_generation,
-                spec_text=spec_text,
-                api_key=api_key,
-                provider=provider,
-                model=model,
-            )
+        # Store result (with size limit)
+        _store_job(job_id, {
+            "files": result.get("generated_files", {}),
+            "status": result.get("status", "unknown"),
+        })
 
-            # Store result
-            _jobs[job_id] = {
-                "files": result.get("generated_files", {}),
-                "status": result.get("status", "unknown"),
-            }
-
-            # Send completion
-            await websocket.send_json({
-                "event": "complete",
-                "job_id": job_id,
-                "status": result.get("status", "unknown"),
-                "files": result.get("generated_files", {}),
-            })
-
-        finally:
-            events.remove_handler(event_handler)
+        # Send completion
+        await websocket.send_json({
+            "event": "complete",
+            "job_id": job_id,
+            "status": result.get("status", "unknown"),
+            "files": result.get("generated_files", {}),
+        })
 
     except WebSocketDisconnect:
         pass
@@ -163,33 +170,42 @@ async def ws_generate(websocket: WebSocket):
             pass
 
 
-def _run_generation(spec_text: str, api_key: str, provider: str, model: str) -> dict:
-    """Run the SpecForge workflow synchronously (called from thread)."""
-    # Set API key for this generation
-    if api_key and provider != "pi":
-        os.environ["OPENAI_API_KEY"] = api_key
-        os.environ["ANTHROPIC_API_KEY"] = api_key
-        os.environ["MOONSHOT_API_KEY"] = api_key
+def _run_generation(
+    spec_text: str,
+    api_key: str,
+    provider: str,
+    model: str,
+    on_progress: Callable | None = None,
+) -> dict:
+    """Run the SpecForge workflow synchronously (called from thread).
 
-    # Configure provider
-    from specforge.config import set_model
-    from specforge.providers import set_provider_type
+    Thread-safe: uses RunConfig instead of global state.
+    API key is passed through RunConfig, never set in os.environ.
+    """
+    from specforge.providers import RunConfig
+    from specforge.workflow import run_workflow
 
-    set_model(model)
-    set_provider_type(provider)
+    # Create per-run config — no globals, no os.environ mutation
+    run_config = RunConfig(
+        provider_type=provider,
+        model=model,
+        api_key=api_key if provider != "pi" else None,
+        on_progress=on_progress,
+    )
 
     # Create temp output dir
     output_dir = tempfile.mkdtemp(prefix="specforge-")
 
     try:
-        from specforge.workflow import run_workflow
         result = run_workflow(
             spec_text=spec_text,
             output_dir=output_dir,
             max_iterations=4,
+            run_config=run_config,
         )
         return dict(result)
     finally:
+        run_config.stop()
         # Clean up temp dir
         shutil.rmtree(output_dir, ignore_errors=True)
 

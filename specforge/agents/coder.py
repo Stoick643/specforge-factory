@@ -302,7 +302,8 @@ def _condense_system_design(system_design: dict) -> str:
 
 
 def _generate_in_batches(
-    system_design: dict, error_context: str = "", provider: LlmProvider | None = None
+    system_design: dict, error_context: str = "", provider: LlmProvider | None = None,
+    _run_callback=None,
 ) -> dict[str, str]:
     """Generate files in batches to avoid token limits.
 
@@ -321,7 +322,7 @@ def _generate_in_batches(
 
     for batch in batches:
         console.print(f"    Generating {batch['name']} files...")
-        events.emit("coder", "progress", f"Generating {batch['name']} files...")
+        events.emit("coder", "progress", f"Generating {batch['name']} files...", _run_callback=_run_callback)
         prompt = (
             f"System Design:\n{system_design_text}\n\n"
             f"{batch['instruction']}\n"
@@ -359,7 +360,7 @@ def _generate_in_batches(
                 batch_files = _parse_files_response(response)
                 all_files.update(batch_files)
                 console.print(f"    Got {len(batch_files)} files")
-                events.emit("coder", "progress", f"Got {len(batch_files)} {batch['name']} files")
+                events.emit("coder", "progress", f"Got {len(batch_files)} {batch['name']} files", _run_callback=_run_callback)
                 break
             except (json.JSONDecodeError, ValueError) as e:
                 preview = (response[:200] + "...") if response and len(response) > 200 else response
@@ -425,7 +426,8 @@ def coder_node(state: AgentState) -> dict:
     """LangGraph node: Coder agent."""
     iteration = state.get("iteration", 1)
     print_agent_start("Coder", iteration)
-    events.emit("coder", "start", "Generating project files...", iteration=iteration)
+    _cb = events.get_run_callback(state)
+    events.emit("coder", "start", "Generating project files...", iteration=iteration, _run_callback=_cb)
 
     system_design = state["system_design"]
     test_result = state.get("test_result")
@@ -447,9 +449,9 @@ def coder_node(state: AgentState) -> dict:
             if len(feedback) > 2000:
                 feedback = feedback[:2000] + "\n... (truncated)"
             error_context = f"ERRORS FROM PREVIOUS RUN:\n{deduped_errors}\n\nFEEDBACK:\n{feedback}"
-            generated_files = _generate_in_batches(system_design, error_context=error_context, provider=provider)
+            generated_files = _generate_in_batches(system_design, error_context=error_context, provider=provider, _run_callback=_cb)
         else:
-            generated_files = _generate_in_batches(system_design, provider=provider)
+            generated_files = _generate_in_batches(system_design, provider=provider, _run_callback=_cb)
 
         # Post-generation fixups
         generated_files = _fix_known_dep_conflicts(generated_files)
@@ -460,7 +462,7 @@ def coder_node(state: AgentState) -> dict:
 
         print_agent_done("Coder", f"Generated {len(generated_files)} files")
         events.emit("coder", "done", f"Generated {len(generated_files)} files",
-                     iteration=iteration, file_count=len(generated_files),
+                     iteration=iteration, _run_callback=_cb, file_count=len(generated_files),
                      files=list(generated_files.keys()))
 
         return {
@@ -469,7 +471,7 @@ def coder_node(state: AgentState) -> dict:
 
     except (json.JSONDecodeError, ValueError) as e:
         print_agent_error("Coder", f"Failed to parse LLM response: {e}")
-        events.emit("coder", "error", f"JSON parse failed: {e}", iteration=iteration)
+        events.emit("coder", "error", f"JSON parse failed: {e}", iteration=iteration, _run_callback=_cb)
         # Don't set status=error — let the Tester re-run on existing files
         # This way the loop can continue with another iteration
         console.print("  [warning]Keeping previous files on disk, Tester will re-run[/warning]")

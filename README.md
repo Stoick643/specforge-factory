@@ -123,7 +123,7 @@ web/                        # Web UI
     backend/main.py         # FastAPI server + WebSocket
     frontend/index.html     # Single-page app
     run.py                  # Start script
-tests/                      # 51 unit tests
+tests/                      # 122+ unit tests
 ```
 
 ## License

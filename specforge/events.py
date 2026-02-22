@@ -45,8 +45,19 @@ def clear_handlers() -> None:
     _handlers.clear()
 
 
-def emit(agent: str, event: str, message: str, iteration: int = 0, **data) -> None:
-    """Emit a progress event to all registered handlers."""
+def emit(agent: str, event: str, message: str, iteration: int = 0,
+         _run_callback: Callable[[ProgressEvent], None] | None = None, **data) -> None:
+    """Emit a progress event to all registered handlers and optional per-run callback.
+
+    Args:
+        agent: Agent name (architect, coder, tester, etc.)
+        event: Event type (start, progress, done, error, etc.)
+        message: Human-readable message.
+        iteration: Current iteration number.
+        _run_callback: Per-run callback for scoped event delivery (e.g. Web UI).
+            When set, this callback receives the event in addition to global handlers.
+        **data: Extra data to include in the event.
+    """
     ev = ProgressEvent(
         agent=agent,
         event=event,
@@ -56,3 +67,18 @@ def emit(agent: str, event: str, message: str, iteration: int = 0, **data) -> No
     )
     for handler in _handlers:
         handler(ev)
+    if _run_callback is not None:
+        _run_callback(ev)
+
+
+def get_run_callback(state: dict) -> Callable[[ProgressEvent], None] | None:
+    """Extract the on_progress callback from agent state, if available.
+
+    Usage in agents:
+        cb = events.get_run_callback(state)
+        events.emit("agent", "start", "msg", _run_callback=cb)
+    """
+    run_config = state.get("run_config")
+    if run_config is not None and hasattr(run_config, "on_progress"):
+        return run_config.on_progress
+    return None

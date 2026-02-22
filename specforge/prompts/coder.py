@@ -57,21 +57,3 @@ Generate ALL files needed. Every file must be complete and working. The tests mu
 
 Return ONLY a JSON object mapping file paths to file contents.
 """
-
-REPAIR_PROMPT = """\
-The previously generated code had errors. Fix the issues and regenerate ALL files.
-
-## Test Errors
-
-{test_feedback}
-
-## Error Details
-
-{error_details}
-
-## Files That Need Fixing
-
-{previous_files_summary}
-
-Fix ALL issues. Regenerate the complete set of files. Return ONLY a JSON object mapping file paths to complete file contents. No code fences, no explanation.
-"""
