@@ -258,6 +258,13 @@ def tester_node(state: AgentState) -> dict:
             _write_files(output_dir, generated_files)
         console.print(f"  Wrote {len(generated_files)} files to [bold]{output_dir}[/bold]")
 
+        # Save SystemDesign for later verification
+        system_design = state.get("system_design", {})
+        if system_design:
+            import json as _json
+            design_path = Path(output_dir) / "_system_design.json"
+            design_path.write_text(_json.dumps(system_design, indent=2), encoding="utf-8")
+
         # Step 1.5: Validate project structure
         validation_warnings = _validate_project(generated_files)
         if validation_warnings:

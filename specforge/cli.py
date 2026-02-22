@@ -158,6 +158,85 @@ def generate(
 
 
 @app.command()
+def verify(
+    project_dir: Path = typer.Argument(
+        ...,
+        help="Path to a generated project directory.",
+        exists=True,
+    ),
+    spec_file: Path = typer.Option(
+        None,
+        "--spec",
+        "-s",
+        help="Original spec file (for spec coverage check). If not provided, coverage is skipped.",
+    ),
+) -> None:
+    """Run verification checks on an already-generated project."""
+    import json
+    import os
+
+    from specforge.agents.verifier import (
+        check_app_starts,
+        check_docker_builds,
+        check_project_structure,
+        check_spec_coverage,
+        check_tests_meaningful,
+        check_tests_pass,
+        print_verification_report,
+        VerificationReport,
+    )
+    from specforge.agents.tester import _parse_pytest_output, _run_pytest, _get_venv_python
+
+    console.print(f"Verifying project: [bold]{project_dir}[/bold]\n")
+
+    # Load generated files
+    generated_files: dict[str, str] = {}
+    for root, dirs, filenames in os.walk(str(project_dir)):
+        dirs[:] = [d for d in dirs if d not in ('.venv', '__pycache__', '.pytest_cache', '.git')]
+        for f in filenames:
+            full = os.path.join(root, f)
+            rel = os.path.relpath(full, str(project_dir))
+            try:
+                with open(full, encoding="utf-8") as fh:
+                    generated_files[rel] = fh.read()
+            except (UnicodeDecodeError, PermissionError):
+                pass
+
+    # Run pytest
+    console.print("Running pytest...")
+    returncode, pytest_output = _run_pytest(str(project_dir.resolve()))
+    total, passed, failed, errors = _parse_pytest_output(pytest_output)
+    console.print(f"  {passed} passed, {failed} failed, {errors} errors out of {total}\n")
+
+    # Load system design from spec if provided
+    system_design: dict = {"endpoints": [], "database_models": []}
+    if spec_file:
+        # Run architect to get system design
+        console.print("Running Architect to extract SystemDesign from spec...")
+        from specforge.models import SystemDesign
+        from specforge.prompts.architect import SYSTEM_PROMPT, USER_PROMPT
+        spec_text = spec_file.read_text(encoding="utf-8")
+
+        # Try to load cached design
+        cache_file = project_dir / "_system_design.json"
+        if cache_file.exists():
+            system_design = json.loads(cache_file.read_text(encoding="utf-8"))
+            console.print("  Loaded cached SystemDesign\n")
+        else:
+            console.print("  [warning]No cached SystemDesign. Spec coverage will use empty design.[/warning]\n")
+
+    report = VerificationReport()
+    report.checks.append(check_tests_pass(returncode, total, failed, errors))
+    report.checks.append(check_app_starts(str(project_dir.resolve())))
+    report.checks.append(check_docker_builds(str(project_dir.resolve())))
+    report.checks.append(check_spec_coverage(generated_files, system_design))
+    report.checks.append(check_tests_meaningful(total, system_design))
+    report.checks.append(check_project_structure(generated_files))
+
+    print_verification_report(report)
+
+
+@app.command()
 def example(
     copy_to: Path = typer.Option(
         None,
