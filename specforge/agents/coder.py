@@ -250,6 +250,14 @@ def _build_batch_system_prompt(system_design: dict) -> str:
     if password_libs:
         prompt += f"Use {password_libs[0]} for password hashing.\n"
 
+    # Known dependency conflicts
+    if "passlib" in dependencies or any("passlib" in d for d in dependencies):
+        prompt += (
+            "\nCRITICAL: passlib is incompatible with bcrypt>=4.1. "
+            "In requirements.txt, pin bcrypt<4.1 (e.g. bcrypt==4.0.1) "
+            "or use passlib[bcrypt]==1.7.4 with bcrypt==4.0.1.\n"
+        )
+
     prompt += (
         "\nCRITICAL test rules:\n"
         "- Tests MUST use @pytest.mark.asyncio\n"
@@ -258,6 +266,39 @@ def _build_batch_system_prompt(system_design: dict) -> str:
     )
 
     return prompt
+
+
+def _condense_system_design(system_design: dict) -> str:
+    """Create a condensed version of SystemDesign for repair iterations.
+
+    Full JSON can be 10-15KB. This produces a ~2KB summary with just
+    the essential structure the Coder needs to regenerate files.
+    """
+    lines = [
+        f"Project: {system_design.get('project_name', 'unknown')}",
+        f"Description: {system_design.get('description', '')}",
+        "",
+        "Dependencies: " + ", ".join(system_design.get("dependencies", [])),
+        "",
+        "Database Models:",
+    ]
+    for m in system_design.get("database_models", []):
+        fields = ", ".join(f.get("name", "?") for f in m.get("fields", []))
+        lines.append(f"  - {m.get('name', '?')} ({m.get('table_name', '?')}): {fields}")
+
+    lines.append("")
+    lines.append("Endpoints:")
+    for ep in system_design.get("endpoints", []):
+        auth = ep.get("auth", "none")
+        auth_note = f" [auth: {auth}]" if auth != "none" else ""
+        lines.append(f"  - {ep.get('method', '?')} {ep.get('path', '?')}{auth_note}")
+
+    lines.append("")
+    lines.append("Env Variables:")
+    for v in system_design.get("env_variables", []):
+        lines.append(f"  - {v.get('name', '?')}: {v.get('description', '')}")
+
+    return "\n".join(lines)
 
 
 def _generate_in_batches(
@@ -273,13 +314,18 @@ def _generate_in_batches(
 
     batches = _build_dynamic_batches(system_design)
     batch_system = _build_batch_system_prompt(system_design)
-    system_design_json = json.dumps(system_design, indent=2)
+
+    # Use condensed design on repair iterations to save tokens
+    if error_context:
+        system_design_text = _condense_system_design(system_design)
+    else:
+        system_design_text = json.dumps(system_design, indent=2)
 
     for batch in batches:
         console.print(f"    Generating {batch['name']} files...")
         events.emit("coder", "progress", f"Generating {batch['name']} files...")
         prompt = (
-            f"System Design:\n{system_design_json}\n\n"
+            f"System Design:\n{system_design_text}\n\n"
             f"{batch['instruction']}\n"
             f"Return ONLY a JSON object mapping file paths to complete file contents."
         )
@@ -302,6 +348,10 @@ def _generate_in_batches(
                     break
             prompt += existing
 
+        # Log prompt size for debugging
+        total_prompt_size = len(batch_system) + len(prompt)
+        console.print(f"    Prompt size: {total_prompt_size:,} chars (system: {len(batch_system):,}, user: {len(prompt):,})")
+
         # Retry up to 2 times on parse failure
         for attempt in range(3):
             try:
@@ -323,6 +373,56 @@ def _generate_in_batches(
     return all_files
 
 
+def _fix_known_dep_conflicts(files: dict[str, str]) -> dict[str, str]:
+    """Patch requirements.txt for known dependency conflicts.
+
+    Currently handles:
+    - passlib + bcrypt>=4.1 incompatibility
+    """
+    req_key = None
+    for fp in files:
+        if fp.endswith("requirements.txt"):
+            req_key = fp
+            break
+
+    if not req_key:
+        return files
+
+    content = files[req_key]
+    lines = content.strip().split("\n")
+    has_passlib = any("passlib" in line.lower() for line in lines)
+    has_bcrypt_line = any(line.strip().lower().startswith("bcrypt") for line in lines)
+
+    if has_passlib:
+        new_lines = []
+        for line in lines:
+            stripped = line.strip().lower()
+            # Fix unpinned or too-new bcrypt
+            if stripped.startswith("bcrypt") and not stripped.startswith("bcrypt<") and "==" not in stripped:
+                new_lines.append("bcrypt==4.0.1")
+            elif stripped.startswith("bcrypt==") and stripped != "bcrypt==4.0.1":
+                # Check if version is >= 4.1
+                try:
+                    version = stripped.split("==")[1]
+                    major, minor = int(version.split(".")[0]), int(version.split(".")[1])
+                    if major > 4 or (major == 4 and minor >= 1):
+                        new_lines.append("bcrypt==4.0.1")
+                    else:
+                        new_lines.append(line)
+                except (ValueError, IndexError):
+                    new_lines.append(line)
+            else:
+                new_lines.append(line)
+
+        # If passlib is present but no bcrypt line, add pinned bcrypt
+        if has_passlib and not has_bcrypt_line:
+            new_lines.append("bcrypt==4.0.1")
+
+        files[req_key] = "\n".join(new_lines) + "\n"
+
+    return files
+
+
 def coder_node(state: AgentState) -> dict:
     """LangGraph node: Coder agent."""
     iteration = state.get("iteration", 1)
@@ -339,14 +439,22 @@ def coder_node(state: AgentState) -> dict:
     try:
         if iteration > 1 and test_result:
             # Repair mode: regenerate with error context
+            # Use deduplicated errors instead of raw output
+            from specforge.agents.tester import _deduplicate_errors
             pytest_output = test_result.get("output", "")
-            if len(pytest_output) > 2000:
-                pytest_output = pytest_output[:2000] + "\n... (truncated)"
+            deduped_errors = _deduplicate_errors(pytest_output)
+            if len(deduped_errors) > 2000:
+                deduped_errors = deduped_errors[:2000] + "\n... (truncated)"
             feedback = test_result.get("feedback", "No feedback available")
-            error_context = f"ERRORS FROM PREVIOUS RUN:\n{pytest_output}\n\nFEEDBACK:\n{feedback}"
+            if len(feedback) > 2000:
+                feedback = feedback[:2000] + "\n... (truncated)"
+            error_context = f"ERRORS FROM PREVIOUS RUN:\n{deduped_errors}\n\nFEEDBACK:\n{feedback}"
             generated_files = _generate_in_batches(system_design, error_context=error_context, provider=provider)
         else:
             generated_files = _generate_in_batches(system_design, provider=provider)
+
+        # Post-generation fixups
+        generated_files = _fix_known_dep_conflicts(generated_files)
 
         console.print(f"  Generated [bold]{len(generated_files)}[/bold] files:")
         for filepath in sorted(generated_files.keys()):

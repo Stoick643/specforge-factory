@@ -74,6 +74,47 @@ def _parse_pytest_output(output: str) -> tuple[int, int, int, int]:
     return total, passed, failed, errors
 
 
+def _deduplicate_errors(pytest_output: str) -> str:
+    """Extract unique error types from pytest output with counts.
+
+    Turns 78 identical 'ValueError: password cannot be loaded' lines
+    into '(×78) ValueError: password cannot be loaded'.
+    """
+    from collections import Counter
+
+    error_lines: list[str] = []
+    for line in pytest_output.split("\n"):
+        line = line.strip()
+        # Match common error patterns
+        if any(marker in line for marker in ("Error:", "Exception:", "FAILED", "ImportError")):
+            # Normalize: strip test name prefix, keep just the error
+            if " - " in line:
+                error_part = line.split(" - ", 1)[1].strip()
+            elif "ERROR " in line:
+                error_part = line
+            elif "FAILED " in line:
+                error_part = line
+            else:
+                error_part = line
+            error_lines.append(error_part)
+
+    if not error_lines:
+        # Fall back to last 20 lines
+        lines = [l.strip() for l in pytest_output.strip().split("\n") if l.strip()]
+        return "\n".join(lines[-20:])
+
+    # Count unique errors
+    counts = Counter(error_lines)
+    deduped = []
+    for error, count in counts.most_common(15):  # Top 15 unique errors
+        if count > 1:
+            deduped.append(f"(×{count}) {error}")
+        else:
+            deduped.append(error)
+
+    return "\n".join(deduped)
+
+
 def _get_venv_python(output_dir: str) -> str:
     """Get the path to the venv's Python executable."""
     venv_dir = Path(output_dir) / ".venv"
@@ -144,8 +185,14 @@ def _analyze_failures(pytest_output: str, files: dict[str, str], provider=None) 
         if provider is None:
             provider = get_global_provider()
         file_list = "\n".join(f"- {fp}" for fp in sorted(files.keys()))
-        prompt = ANALYSIS_PROMPT.format(pytest_output=pytest_output, file_list=file_list)
-        return provider.invoke("You are an expert Python test analyst.", prompt)
+        # Send deduplicated errors to the LLM, not the full raw output
+        deduped = _deduplicate_errors(pytest_output)
+        prompt = ANALYSIS_PROMPT.format(pytest_output=deduped, file_list=file_list)
+        result = provider.invoke("You are an expert Python test analyst.", prompt)
+        # Cap feedback size to avoid bloating repair prompts
+        if len(result) > 2000:
+            result = result[:2000] + "\n... (feedback truncated)"
+        return result
     except Exception as e:
         return f"Could not analyze failures: {e}\n\nRaw pytest output:\n{pytest_output}"
 
@@ -260,21 +307,25 @@ def tester_node(state: AgentState) -> dict:
         # Run verification on final iteration (success or last attempt)
         verification_report = None
         if is_final:
-            from specforge.agents.verifier import (
-                print_verification_report,
-                run_verification,
-            )
-            system_design = state.get("system_design", {})
-            verification_report = run_verification(
-                output_dir=output_dir,
-                generated_files=generated_files,
-                system_design=system_design,
-                pytest_returncode=returncode,
-                total_tests=total,
-                failed_tests=failed,
-                error_tests=errors,
-            )
-            print_verification_report(verification_report)
+            try:
+                from specforge.agents.verifier import (
+                    print_verification_report,
+                    run_verification,
+                )
+                system_design = state.get("system_design", {})
+                verification_report = run_verification(
+                    output_dir=output_dir,
+                    generated_files=generated_files,
+                    system_design=system_design,
+                    pytest_returncode=returncode,
+                    total_tests=total,
+                    failed_tests=failed,
+                    error_tests=errors,
+                )
+                print_verification_report(verification_report)
+            except Exception as e:
+                console.print(f"  [warning]⚠ Verification failed: {e}[/warning]")
+                events.emit("verifier", "error", str(e))
 
         if all_passed:
             result = {
