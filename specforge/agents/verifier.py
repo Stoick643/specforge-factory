@@ -249,10 +249,11 @@ def check_spec_coverage(
     )
 
     for filepath, content in generated_files.items():
-        if "router" in filepath.lower() or "main.py" in filepath:
+        fp_normalized = filepath.replace("\\", "/")
+        if "router" in fp_normalized.lower() or "main.py" in fp_normalized:
             # Try to find which prefix applies to this file
             file_prefix = ""
-            if "router" in filepath.lower():
+            if "router" in fp_normalized.lower():
                 # Check for APIRouter(prefix=...) directly in the router file
                 apirouter_match = apirouter_prefix_pattern.search(content)
                 if apirouter_match:
@@ -272,7 +273,7 @@ def check_spec_coverage(
 
                 # Fallback: try matching by filename convention
                 if not file_prefix:
-                    basename = filepath.split("/")[-1].replace(".py", "")
+                    basename = fp_normalized.split("/")[-1].replace(".py", "")
                     for var_name, prefix in prefix_map.items():
                         if basename in var_name or basename in prefix:
                             file_prefix = prefix
@@ -367,7 +368,9 @@ def check_project_structure(generated_files: dict[str, str]) -> VerificationChec
             issues.append("requirements.txt missing 'fastapi'")
 
     # Must have at least one test file
-    test_files = [fp for fp in generated_files if fp.startswith("tests/") and fp.endswith(".py") and fp != "tests/__init__.py"]
+    # Normalize paths (Windows backslashes) for comparison
+    normalized_fps = [fp.replace("\\", "/") for fp in generated_files]
+    test_files = [fp for fp in normalized_fps if fp.startswith("tests/") and fp.endswith(".py") and fp != "tests/__init__.py"]
     if not test_files:
         issues.append("No test files in tests/")
 
