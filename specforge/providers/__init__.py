@@ -3,10 +3,13 @@
 Supports two modes:
 - ApiProvider: Direct LLM API calls via langchain (needs API key)
 - PiProvider: Pi RPC subprocess (no API key, uses user's Claude/Max plan)
+
+Thread-safe via RunConfig: each generation run gets its own config and provider instance.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
 
@@ -30,9 +33,8 @@ class LlmProvider(Protocol):
 class ApiProvider:
     """Provider that uses langchain ChatOpenAI/ChatAnthropic for direct API calls."""
 
-    def __init__(self):
-        from specforge.config import get_llm
-        self._get_llm = get_llm
+    def __init__(self, model: str | None = None):
+        self._model = model
 
     def invoke(self, system_prompt: str, user_prompt: str) -> str:
         from langchain_core.messages import HumanMessage, SystemMessage
@@ -56,6 +58,18 @@ class ApiProvider:
             return structured_llm.invoke(messages)
         except Exception:
             return None
+
+    def _get_llm(self, temperature: float = 0.1):
+        from specforge.config import get_llm, get_model, set_model
+        # If we have a specific model, temporarily set it
+        if self._model:
+            old_model = get_model()
+            set_model(self._model)
+            try:
+                return get_llm(temperature=temperature)
+            finally:
+                set_model(old_model)
+        return get_llm(temperature=temperature)
 
     def stop(self) -> None:
         pass  # Nothing to clean up
@@ -91,32 +105,58 @@ class PiProvider:
             self._started = False
 
 
-# Global provider instance
-_current_provider: LlmProvider | None = None
-_provider_type: str = "api"  # "api" or "pi"
+@dataclass
+class RunConfig:
+    """Configuration for a single generation run.
+
+    Each run gets its own RunConfig with its own provider instance.
+    Thread-safe: no shared mutable state between runs.
+    """
+    provider_type: str = "api"  # "api" or "pi"
+    model: str | None = None
+    _provider: LlmProvider | None = field(default=None, init=False, repr=False)
+
+    def get_provider(self) -> LlmProvider:
+        """Get or create the provider for this run."""
+        if self._provider is None:
+            if self.provider_type == "pi":
+                self._provider = PiProvider()
+            else:
+                self._provider = ApiProvider(model=self.model)
+        return self._provider
+
+    def stop(self) -> None:
+        """Clean up the provider."""
+        if self._provider is not None:
+            self._provider.stop()
+            self._provider = None
+
+
+# ── Global convenience API (for CLI / single-threaded use) ──────────
+
+_current_config: RunConfig | None = None
 
 
 def set_provider_type(provider_type: str) -> None:
-    """Set which provider to use."""
-    global _provider_type, _current_provider
-    _provider_type = provider_type
-    _current_provider = None  # Reset so it gets recreated
+    """Set which provider to use (global, for CLI)."""
+    global _current_config
+    _current_config = RunConfig(provider_type=provider_type)
 
 
 def get_provider() -> LlmProvider:
-    """Get the current LLM provider (creates on first call)."""
-    global _current_provider
-    if _current_provider is None:
-        if _provider_type == "pi":
-            _current_provider = PiProvider()
-        else:
-            _current_provider = ApiProvider()
-    return _current_provider
+    """Get the current LLM provider (global, for CLI).
+
+    For thread-safe usage, use RunConfig.get_provider() instead.
+    """
+    global _current_config
+    if _current_config is None:
+        _current_config = RunConfig()
+    return _current_config.get_provider()
 
 
 def stop_provider() -> None:
-    """Stop and clean up the current provider."""
-    global _current_provider
-    if _current_provider is not None:
-        _current_provider.stop()
-        _current_provider = None
+    """Stop and clean up the current provider (global, for CLI)."""
+    global _current_config
+    if _current_config is not None:
+        _current_config.stop()
+        _current_config = None

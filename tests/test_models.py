@@ -17,7 +17,7 @@ from specforge.models import (
     ResponseSchema,
     SchemaField,
     SystemDesign,
-    TestResult,
+    TestRunResult,
 )
 
 
@@ -124,14 +124,14 @@ class TestSystemDesign:
         assert design2.python_version == "3.12"
 
 
-class TestTestResult:
+class TestTestRunResult:
     def test_passing(self):
-        result = TestResult(passed=True, total_tests=10, passed_tests=10)
+        result = TestRunResult(passed=True, total_tests=10, passed_tests=10)
         assert result.passed is True
         assert result.failed_tests == 0
 
     def test_failing(self):
-        result = TestResult(
+        result = TestRunResult(
             passed=False,
             total_tests=10,
             passed_tests=7,

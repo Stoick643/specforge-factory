@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import json
+import re
+from collections import defaultdict
 
 from specforge import events
 from specforge.models import AgentState
-from specforge.prompts.coder import REPAIR_PROMPT, SYSTEM_PROMPT, USER_PROMPT
-from specforge.providers import get_provider
+from specforge.providers import LlmProvider, get_provider as get_global_provider
 from specforge.utils.console import console, print_agent_done, print_agent_error, print_agent_start
 
 
@@ -29,7 +30,6 @@ def _parse_files_response(content: str) -> dict[str, str]:
             pass
 
     # Try 2: Extract from code fences (```json ... ```)
-    import re
     fence_match = re.search(r"```(?:json)?\s*\n(\{.*?\})\s*\n```", text, re.DOTALL)
     if fence_match:
         try:
@@ -50,81 +50,230 @@ def _parse_files_response(content: str) -> dict[str, str]:
     raise json.JSONDecodeError("No valid JSON object found in response", text, 0)
 
 
-def _generate_in_batches(system_design_json: str, error_context: str = "") -> dict[str, str]:
-    """Generate files in batches to avoid token limits."""
-    provider = get_provider()
-    all_files: dict[str, str] = {}
+def _extract_endpoint_groups(system_design: dict) -> dict[str, list[dict]]:
+    """Group endpoints by tag or first path segment.
 
-    batches = [
-        {
-            "name": "core",
-            "instruction": (
-                "Generate ONLY these core files:\n"
-                "1. app/__init__.py\n"
-                "2. app/config.py - Settings from env vars\n"
-                "3. app/database.py - Async SQLAlchemy engine & session\n"
-                "4. app/models.py - SQLModel database models\n"
-                "5. app/schemas.py - Pydantic request/response schemas\n"
-                "6. app/auth.py - JWT authentication\n"
-                "7. app/dependencies.py - Shared dependencies (get_db, get_current_user)\n"
-            ),
-        },
-        {
-            "name": "routers",
-            "instruction": (
-                "Generate ONLY the router files and main app:\n"
-                "1. app/main.py - FastAPI app setup with middleware\n"
-                "2. app/routers/__init__.py\n"
-                "3. app/routers/auth.py - Login endpoint\n"
-                "4. app/routers/links.py - URL shortening, redirect, QR code endpoints\n"
-                "5. app/routers/admin.py - Dashboard/admin endpoints\n"
-                "6. app/routers/health.py - Health check\n"
-                "\nIMPORTANT: Import from app.models, app.schemas, app.auth, app.dependencies, app.database as defined in batch 1.\n"
-            ),
-        },
-        {
-            "name": "tests",
-            "instruction": (
-                "Generate ONLY the test files:\n"
-                "1. tests/__init__.py\n"
-                "2. tests/conftest.py - Fixtures with in-memory SQLite, async test client\n"
-                "3. tests/test_health.py\n"
-                "4. tests/test_auth.py\n"
-                "5. tests/test_links.py\n"
-                "6. tests/test_admin.py\n"
-                "\nTests must use httpx.AsyncClient with ASGITransport. Use in-memory SQLite.\n"
-            ),
-        },
-        {
-            "name": "infra",
-            "instruction": (
-                "Generate ONLY the infrastructure files:\n"
-                "1. requirements.txt - All Python deps with versions\n"
-                "2. Dockerfile - Python slim image\n"
-                "3. docker-compose.yml - Service with volume mount\n"
-                "4. .env.example - Example env vars\n"
-                "5. README.md - Setup and usage\n"
-            ),
-        },
+    Returns a dict like {"tasks": [...], "users": [...], "health": [...]}.
+    """
+    groups: dict[str, list[dict]] = defaultdict(list)
+    endpoints = system_design.get("endpoints", [])
+
+    for ep in endpoints:
+        # Prefer first tag if available
+        tags = ep.get("tags", [])
+        if tags:
+            group_name = tags[0].lower().replace(" ", "_")
+        else:
+            # Fall back to first meaningful path segment
+            path = ep.get("path", "/")
+            segments = [s for s in path.strip("/").split("/") if s and not s.startswith("{")]
+            if segments:
+                # Skip common prefixes like "api", "v1", "v2"
+                skip_prefixes = {"api", "v1", "v2", "v3"}
+                meaningful = [s for s in segments if s not in skip_prefixes]
+                group_name = meaningful[0] if meaningful else segments[0]
+            else:
+                group_name = "root"
+
+        groups[group_name].append(ep)
+
+    return dict(groups)
+
+
+def _has_auth_endpoints(system_design: dict) -> bool:
+    """Check if any endpoint requires authentication."""
+    for ep in system_design.get("endpoints", []):
+        auth = ep.get("auth", "none")
+        if auth and auth != "none":
+            return True
+    return False
+
+
+def _describe_models(system_design: dict) -> str:
+    """Build a human-readable description of database models for prompts."""
+    models = system_design.get("database_models", [])
+    if not models:
+        return "No database models defined."
+    lines = []
+    for m in models:
+        fields = ", ".join(f.get("name", "?") for f in m.get("fields", []))
+        lines.append(f"- {m.get('name', '?')} (table: {m.get('table_name', '?')}): {fields}")
+    return "\n".join(lines)
+
+
+def _describe_env_vars(system_design: dict) -> str:
+    """Build a human-readable description of env variables for prompts."""
+    env_vars = system_design.get("env_variables", [])
+    if not env_vars:
+        return "No environment variables defined."
+    lines = []
+    for v in env_vars:
+        default = f" (default: {v['default_value']})" if v.get("default_value") else " (required)"
+        lines.append(f"- {v.get('name', '?')}: {v.get('description', '')}{default}")
+    return "\n".join(lines)
+
+
+def _describe_endpoints_for_group(endpoints: list[dict]) -> str:
+    """Build a human-readable description of endpoints for a router group."""
+    lines = []
+    for ep in endpoints:
+        auth = ep.get("auth", "none")
+        auth_note = f" [auth: {auth}]" if auth != "none" else ""
+        lines.append(f"- {ep.get('method', '?')} {ep.get('path', '?')} — {ep.get('summary', '')}{auth_note}")
+    return "\n".join(lines)
+
+
+def _build_dynamic_batches(system_design: dict) -> list[dict]:
+    """Build batch definitions dynamically from SystemDesign.
+
+    Instead of hardcoded URL-shortener files, derives the file structure
+    from the actual endpoints, models, and config in the SystemDesign.
+    """
+    endpoint_groups = _extract_endpoint_groups(system_design)
+    has_auth = _has_auth_endpoints(system_design)
+    models_desc = _describe_models(system_design)
+    env_desc = _describe_env_vars(system_design)
+    dependencies = system_design.get("dependencies", [])
+
+    # --- Batch 1: Core files ---
+    core_files = [
+        "1. app/__init__.py",
+        "2. app/config.py - Settings from env vars",
+        "3. app/database.py - Async database engine & session setup",
+        f"4. app/models.py - Database models:\n{models_desc}",
+        "5. app/schemas.py - Pydantic request/response schemas for all endpoints",
+        "6. app/dependencies.py - Shared dependencies (get_db, etc.)",
+    ]
+    if has_auth:
+        core_files.append(f"{len(core_files) + 1}. app/auth.py - Authentication logic (login, token validation)")
+
+    core_instruction = (
+        "Generate ONLY these core files:\n"
+        + "\n".join(core_files)
+        + f"\n\nEnvironment variables:\n{env_desc}"
+    )
+
+    # --- Batch 2: Routers + Main ---
+    router_lines = [
+        "1. app/main.py - FastAPI app setup with middleware, include all routers",
+        "2. app/routers/__init__.py",
+    ]
+    idx = 3
+    # Always include health
+    if "health" not in endpoint_groups:
+        router_lines.append(f"{idx}. app/routers/health.py - Health check endpoint (GET /health)")
+        idx += 1
+
+    for group_name, endpoints in sorted(endpoint_groups.items()):
+        eps_desc = _describe_endpoints_for_group(endpoints)
+        router_lines.append(f"{idx}. app/routers/{group_name}.py - Endpoints:\n{eps_desc}")
+        idx += 1
+
+    router_instruction = (
+        "Generate ONLY the router files and main app:\n"
+        + "\n".join(router_lines)
+        + "\n\nIMPORTANT: Import from app.models, app.schemas, app.dependencies, app.database as defined in batch 1."
+    )
+    if has_auth:
+        router_instruction += "\nImport auth logic from app.auth."
+
+    # --- Batch 3: Tests ---
+    test_lines = [
+        "1. tests/__init__.py",
+        "2. tests/conftest.py - Fixtures with test database, async test client",
+        "3. tests/test_health.py - Health check tests",
+    ]
+    idx = 4
+    for group_name in sorted(endpoint_groups.keys()):
+        if group_name != "health":
+            test_lines.append(f"{idx}. tests/test_{group_name}.py - Tests for {group_name} endpoints")
+            idx += 1
+
+    test_instruction = (
+        "Generate ONLY the test files:\n"
+        + "\n".join(test_lines)
+        + "\n\nTests must use httpx.AsyncClient with ASGITransport. Use in-memory SQLite."
+        + "\nTests MUST use @pytest.mark.asyncio for all async test functions."
+    )
+
+    # --- Batch 4: Infra ---
+    deps_list = ", ".join(dependencies[:15]) if dependencies else "fastapi, uvicorn, sqlmodel"
+    docker = system_design.get("docker", {})
+    port = docker.get("port", 8000)
+    base_image = docker.get("base_image", "python:3.12-slim")
+
+    infra_instruction = (
+        "Generate ONLY the infrastructure files:\n"
+        f"1. requirements.txt - Python deps including: {deps_list}\n"
+        f"2. Dockerfile - Based on {base_image}, expose port {port}\n"
+        "3. docker-compose.yml - Service with volume mount\n"
+        f"4. .env.example - Example env vars:\n{env_desc}\n"
+        "5. README.md - Setup and usage instructions"
+    )
+
+    return [
+        {"name": "core", "instruction": core_instruction},
+        {"name": "routers", "instruction": router_instruction},
+        {"name": "tests", "instruction": test_instruction},
+        {"name": "infra", "instruction": infra_instruction},
     ]
 
-    batch_system = (
+
+def _build_batch_system_prompt(system_design: dict) -> str:
+    """Build the system prompt for batch generation, using dependencies from SystemDesign."""
+    dependencies = [d.lower() for d in system_design.get("dependencies", [])]
+
+    prompt = (
         "You are an expert Python developer. Generate files for a FastAPI microservice.\n"
         "Output a JSON object where keys are file paths and values are complete file contents.\n"
         "Return ONLY valid JSON, no markdown code fences, no explanation.\n"
         "Every file must be complete - no placeholders, no TODOs.\n"
-        "Use async/await, SQLModel for ORM, python-jose for JWT, passlib for passwords.\n"
-        "\n"
-        "CRITICAL SQLModel rules:\n"
-        "- Do NOT use foreign_key= and sa_column= together in Field(). Use ONLY foreign_key=.\n"
-        "- Example: link_id: int = Field(foreign_key='links.id', index=True)\n"
-        "- For relationships: link: Optional['Link'] = Relationship(back_populates='clicks')\n"
-        "\n"
-        "CRITICAL test rules:\n"
+        "Use async/await patterns throughout.\n"
+    )
+
+    # Add ORM-specific tips based on actual dependencies
+    if "sqlmodel" in dependencies:
+        prompt += (
+            "\nCRITICAL SQLModel rules:\n"
+            "- Do NOT use foreign_key= and sa_column= together in Field(). Use ONLY foreign_key=.\n"
+            "- Example: link_id: int = Field(foreign_key='links.id', index=True)\n"
+            "- For relationships: link: Optional['Link'] = Relationship(back_populates='clicks')\n"
+        )
+    elif "sqlalchemy" in dependencies:
+        prompt += "\nUse SQLAlchemy declarative models with async session.\n"
+
+    # Add auth-specific tips based on actual dependencies
+    auth_libs = [d for d in dependencies if d in ("python-jose", "pyjwt", "authlib")]
+    password_libs = [d for d in dependencies if d in ("passlib", "bcrypt", "argon2-cffi")]
+    if auth_libs:
+        prompt += f"\nUse {auth_libs[0]} for token handling.\n"
+    if password_libs:
+        prompt += f"Use {password_libs[0]} for password hashing.\n"
+
+    prompt += (
+        "\nCRITICAL test rules:\n"
         "- Tests MUST use @pytest.mark.asyncio\n"
         "- Use httpx.AsyncClient with ASGITransport\n"
-        "- Use in-memory SQLite: 'sqlite+aiosqlite://'\n"
+        "- Use in-memory SQLite for test database\n"
     )
+
+    return prompt
+
+
+def _generate_in_batches(
+    system_design: dict, error_context: str = "", provider: LlmProvider | None = None
+) -> dict[str, str]:
+    """Generate files in batches to avoid token limits.
+
+    Batches are built dynamically from SystemDesign — no hardcoded file names.
+    """
+    if provider is None:
+        provider = get_global_provider()
+    all_files: dict[str, str] = {}
+
+    batches = _build_dynamic_batches(system_design)
+    batch_system = _build_batch_system_prompt(system_design)
+    system_design_json = json.dumps(system_design, indent=2)
 
     for batch in batches:
         console.print(f"    Generating {batch['name']} files...")
@@ -137,18 +286,17 @@ def _generate_in_batches(system_design_json: str, error_context: str = "") -> di
 
         if error_context:
             # Truncate error context to avoid exceeding token limits
-            if len(error_context) > 4000:
-                error_context = error_context[:4000] + "\n... (truncated)"
-            prompt += f"\n\n{error_context}\n\nFix ALL issues from previous errors above."
+            truncated_error = error_context
+            if len(truncated_error) > 4000:
+                truncated_error = truncated_error[:4000] + "\n... (truncated)"
+            prompt += f"\n\n{truncated_error}\n\nFix ALL issues from previous errors above."
 
         # Include previously generated files as context (only file list + relevant files)
         if all_files:
             existing = "\n\nAlready generated files (for import reference):\n"
             for fp, content in sorted(all_files.items()):
-                # Only include files relevant to this batch (keep prompt small)
                 lines = content.split("\n")[:40]
                 existing += f"\n--- {fp} ---\n" + "\n".join(lines) + "\n"
-                # Cap total context size
                 if len(existing) > 8000:
                     existing += "\n... (remaining files omitted for brevity)\n"
                     break
@@ -184,9 +332,11 @@ def coder_node(state: AgentState) -> dict:
     system_design = state["system_design"]
     test_result = state.get("test_result")
 
-    try:
-        system_design_json = json.dumps(system_design, indent=2)
+    # Prefer run_config from state (thread-safe), fall back to global
+    run_config = state.get("run_config")
+    provider = run_config.get_provider() if run_config else get_global_provider()
 
+    try:
         if iteration > 1 and test_result:
             # Repair mode: regenerate with error context
             pytest_output = test_result.get("output", "")
@@ -194,9 +344,9 @@ def coder_node(state: AgentState) -> dict:
                 pytest_output = pytest_output[:2000] + "\n... (truncated)"
             feedback = test_result.get("feedback", "No feedback available")
             error_context = f"ERRORS FROM PREVIOUS RUN:\n{pytest_output}\n\nFEEDBACK:\n{feedback}"
-            generated_files = _generate_in_batches(system_design_json, error_context=error_context)
+            generated_files = _generate_in_batches(system_design, error_context=error_context, provider=provider)
         else:
-            generated_files = _generate_in_batches(system_design_json)
+            generated_files = _generate_in_batches(system_design, provider=provider)
 
         console.print(f"  Generated [bold]{len(generated_files)}[/bold] files:")
         for filepath in sorted(generated_files.keys()):

@@ -159,8 +159,10 @@ class SystemDesign(BaseModel):
 # ── Agent State (for LangGraph) ─────────────────────────────────────
 
 
-class TestResult(BaseModel):
+class TestRunResult(BaseModel):
     """Result from running tests on generated code."""
+
+    __test__ = False  # Prevent pytest from collecting this as a test class
 
     passed: bool = Field(description="Whether all tests passed")
     total_tests: int = Field(default=0, description="Total number of tests")
@@ -183,6 +185,9 @@ class AgentState(TypedDict, total=False):
     spec_text: str  # Raw markdown spec
     output_dir: str  # Where to write generated files
 
+    # Run configuration (thread-safe provider access)
+    run_config: Any  # RunConfig instance — uses Any to stay JSON-friendly for LangGraph
+
     # Architect output
     system_design: dict  # SystemDesign as dict (JSON-serializable for LangGraph)
 
@@ -190,7 +195,10 @@ class AgentState(TypedDict, total=False):
     generated_files: dict[str, str]  # {filepath: content}
 
     # Tester output
-    test_result: dict  # TestResult as dict
+    test_result: dict  # TestRunResult as dict
+
+    # Verification
+    verification: dict  # VerificationReport as dict
 
     # Control flow
     iteration: int  # Current iteration (1-based)

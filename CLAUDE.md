@@ -99,23 +99,33 @@ Factory: `get_provider(provider_name, model) -> LlmProvider`
 - `specforge/config.py` -- model detection, API key validation, get_llm()
 - Multi-provider support: OpenAI, Anthropic, Moonshot, DeepSeek, OpenRouter
 
-### Phase 7: Pi RPC Provider (IN PROGRESS)
-- `specforge/providers/__init__.py` -- LlmProvider protocol, ApiProvider, PiProvider, factory
+### Phase 7: Pi RPC Provider (DONE)
+- `specforge/providers/__init__.py` -- LlmProvider protocol, ApiProvider, PiProvider, RunConfig, factory
 - `specforge/providers/pi_rpc.py` -- PiRpcClient (subprocess management, JSON protocol)
 - Update agents to use LlmProvider instead of get_llm() directly
 - Update CLI with --provider flag
 - Auto-detect Pi installation path (Windows/Mac/Linux)
 - Error handling: Pi not installed, process crash, timeout
 
-### Phase 8: Integration & Testing
-- Unit tests for SpecForge (27 passing)
+### Phase 8: Integration & Testing (DONE)
+- Unit tests for SpecForge (86 passing, 1 skipped)
 - E2E test with API provider (Kimi: 22/31 tests passed on iteration 1, self-correction working)
 - E2E test with Pi provider
 - Fix any issues found
 
-### Phase 9: Polish
+### Phase 9: Polish (DONE)
 - README.md with install, usage, both provider examples
 - Clean error messages and Rich formatting
+
+### Phase 10: Generalization Improvements (DONE)
+- Dynamic batch generation from SystemDesign (no more hardcoded file names)
+- Generic prompts (library choices come from SystemDesign.dependencies)
+- RunConfig for thread-safe provider access (Web UI concurrency)
+- Venv isolation for generated project dependencies
+- Project validation after generation
+- Configurable timeouts (SPECFORGE_PIP_TIMEOUT, SPECFORGE_PYTEST_TIMEOUT)
+- Removed dead code (pydantic-ai dep, unused REPAIR_PROMPT import)
+- Renamed TestResult → TestRunResult to avoid pytest collection warning
 
 ## Project Structure
 

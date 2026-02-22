@@ -34,3 +34,7 @@ output/
 
 # Cache
 _design_cache.json
+
+# Generated test outputs
+bookmark-mng/
+todo-app/

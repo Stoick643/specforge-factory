@@ -132,8 +132,15 @@ def generate(
 
         # Report results
         status = final_state.get("status", "unknown")
+        verification = final_state.get("verification")
+
         if status == "success":
             print_success(str(output))
+            if verification and not verification.get("all_passed"):
+                console.print(
+                    "\n[warning]⚠ Some verification checks failed. "
+                    "See report above for details.[/warning]"
+                )
         else:
             iterations = final_state.get("iteration", 1) - 1
             print_failure(iterations)

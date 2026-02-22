@@ -7,7 +7,7 @@ import json
 from specforge import events
 from specforge.models import AgentState, SystemDesign
 from specforge.prompts.architect import SYSTEM_PROMPT, USER_PROMPT
-from specforge.providers import get_provider
+from specforge.providers import get_provider as get_global_provider
 from specforge.utils.console import console, print_agent_done, print_agent_error, print_agent_start
 
 
@@ -32,7 +32,9 @@ def architect_node(state: AgentState) -> dict:
     events.emit("architect", "start", "Analyzing spec...")
 
     spec_text = state["spec_text"]
-    provider = get_provider()
+    # Prefer run_config from state (thread-safe), fall back to global
+    run_config = state.get("run_config")
+    provider = run_config.get_provider() if run_config else get_global_provider()
     user_prompt = USER_PROMPT.format(spec_text=spec_text)
 
     try:

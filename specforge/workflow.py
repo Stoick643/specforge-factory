@@ -78,13 +78,19 @@ def build_workflow() -> StateGraph:
     return graph.compile()
 
 
-def run_workflow(spec_text: str, output_dir: str, max_iterations: int = 4) -> AgentState:
+def run_workflow(
+    spec_text: str,
+    output_dir: str,
+    max_iterations: int = 4,
+    run_config=None,
+) -> AgentState:
     """Run the full SpecForge workflow.
 
     Args:
         spec_text: Raw markdown spec content.
         output_dir: Directory to write generated files to.
         max_iterations: Maximum number of Coder→Tester iterations.
+        run_config: Optional RunConfig for thread-safe provider access.
 
     Returns:
         Final agent state.
@@ -99,6 +105,9 @@ def run_workflow(spec_text: str, output_dir: str, max_iterations: int = 4) -> Ag
         "status": "in_progress",
         "errors": [],
     }
+
+    if run_config is not None:
+        initial_state["run_config"] = run_config
 
     final_state = workflow.invoke(initial_state)
     return final_state
