@@ -462,13 +462,13 @@ def print_verification_report(report: VerificationReport) -> None:
 
     for check in report.checks:
         if check.skipped:
-            status = "⏭️ Skip"
+            status = "[dim]SKIP[/dim]"
             style = "dim"
         elif check.passed:
-            status = "✅ Pass"
+            status = "[green]PASS[/green]"
             style = "green"
         else:
-            status = "❌ Fail"
+            status = "[red]FAIL[/red]"
             style = "red"
 
         table.add_row(check.name, status, check.details, style=style)
@@ -477,7 +477,12 @@ def print_verification_report(report: VerificationReport) -> None:
     summary = f"{report.passed_count} passed, {report.failed_count} failed"
     if report.skipped_count:
         summary += f", {report.skipped_count} skipped"
-    table.add_row("TOTAL", "✅" if report.all_passed else "❌", summary, style="bold")
+    table.add_row(
+        "TOTAL",
+        "[green]PASS[/green]" if report.all_passed else "[red]FAIL[/red]",
+        summary,
+        style="bold",
+    )
 
     console.print()
     console.print(table)
